@@ -147,6 +147,24 @@ struct HazardSurface {
     HazardType  type           = HazardType::Acid;
 };
 
+// ---------------------------------------------------------------------------
+// v3 — true 3D mesh objects
+// ---------------------------------------------------------------------------
+
+// Identifies which procedural mesh to build. Only the cube for now; extending
+// this enum is how new solid shapes become placeable in levels.
+enum class MeshType : uint8_t { Cube = 0 };
+
+// A solid 3D object placed in a level and rendered by MeshRenderer as
+// flat-shaded, z-buffered triangles (no texture). meshId must be unique.
+struct MeshObjectDef {
+    int       meshId    = 0;
+    MeshType  type      = MeshType::Cube;
+    Vector3   position;        // world-space centre of the object
+    float     yaw       = 0.0f; // rotation about the world Y axis, radians
+    float     scale     = 1.0f; // edge length in world units (for a cube)
+};
+
 struct LevelData {
     std::vector<Sector>             sectors;
     std::vector<WorldSprite>        sprites;
@@ -173,4 +191,8 @@ struct LevelData {
     // Hazard surfaces: axis-aligned rectangles on the X/Z plane that deal
     // damage-per-second while the player stands on them (acid pools, coolant).
     std::vector<HazardSurface>      hazards;
+
+    // True 3D solid objects rendered by MeshRenderer (cubes, etc.). No texture:
+    // flat-shaded from the face normal so the solid reads as 3D.
+    std::vector<MeshObjectDef>     meshObjects;
 };

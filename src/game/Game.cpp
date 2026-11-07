@@ -22,6 +22,8 @@
 #include "renderer/Framebuffer.h"
 #include "renderer/Lighting.h"
 #include "renderer/MarsTerrain.h"
+#include "renderer/MeshRenderer.h"
+#include "renderer/Camera.h"
 #include "renderer/PlaneRenderer.h"
 #include "renderer/SkyRenderer.h"
 #include "renderer/SpriteRenderer.h"
@@ -63,6 +65,7 @@ struct RenderContext {
     SpriteRenderer spriteRenderer;
     PlaneRenderer  planeRenderer;
     TerrainRenderer terrainRenderer;
+    MeshRenderer    meshRenderer;
 
     explicit RenderContext(int rw, int rh)
         : renderWidth(rw), renderHeight(rh),
@@ -71,7 +74,8 @@ struct RenderContext {
           wallRenderer(rw, rh, kFieldOfView),
           spriteRenderer(rw, rh, kFieldOfView),
           planeRenderer(rw, rh, kFieldOfView),
-          terrainRenderer(rw, rh, kFieldOfView) {}
+          terrainRenderer(rw, rh, kFieldOfView),
+          meshRenderer(rw, rh, kFieldOfView) {}
 };
 
 static std::vector<Enemy> CreateEnemies(const std::vector<EnemySpawn>& spawns) {
@@ -850,13 +854,13 @@ static void Render(AppState& app) {
     const Vector3 eyePos = app.player.EyePosition();
     const float   angle  = app.player.Angle();
     const float   pitch  = app.player.Pitch();
-    const float   cosA   = std::cos(angle);
-    const float   sinA   = std::sin(angle);
 
     const float focalLen = (static_cast<float>(rw) * 0.5f) /
                            std::tan(kFieldOfView * 0.5f);
-    const float horizonY = static_cast<float>(rh) * 0.5f -
-                           std::tan(pitch) * focalLen;
+    // True 3D camera (yaw + pitch): a real rotation rather than the old
+    // horizon-line shift, so floors/ceilings/solids stay correct when looking
+    // up/down. At pitch 0 this is identical to the previous yaw-only math.
+    const Camera cam = Camera::Make(eyePos, angle, pitch, focalLen, rw, rh);
 
     rc.skyRenderer.Draw(fb, app.sunWorldAngle, app.sunElevation, angle, pitch);
     fb.ClearDepth();
@@ -896,20 +900,20 @@ static void Render(AppState& app) {
             : noSun;
 
         if (!isMarsSurface) {
-            rc.planeRenderer.DrawPlane(fb, eyePos, cosA, sinA,
-                sector.floorHeight, sector.vertices, horizonY, activeLights, amb, secSun, floorTex);
+            rc.planeRenderer.DrawPlane(fb, cam,
+                sector.floorHeight, sector.vertices, activeLights, amb, secSun, floorTex);
         }
         if (sector.ceilingHeight) {
-            rc.planeRenderer.DrawPlane(fb, eyePos, cosA, sinA,
-                *sector.ceilingHeight, sector.vertices, horizonY, activeLights, amb, noSun, ceilTex);
+            rc.planeRenderer.DrawPlane(fb, cam,
+                *sector.ceilingHeight, sector.vertices, activeLights, amb, noSun, ceilTex);
         }
         if (!isMarsSurface) {
             for (const Wall& wall : sector.walls) {
-                rc.wallRenderer.DrawWall(fb, eyePos, cosA, sinA,
+                rc.wallRenderer.DrawWall(fb, cam,
                     wall.start, wall.end,
                     wall.bottomHeight.value_or(sector.floorHeight),
                     wall.topHeight.value_or(sector.ceilingHeight.value_or(3.0f)),
-                    horizonY, activeLights, amb, secSun,
+                    activeLights, amb, secSun,
                     app.assets.GetTexture(TextureId::Wall));
             }
         }
@@ -922,11 +926,26 @@ static void Render(AppState& app) {
         const float doorHeight = door.topHeight - door.bottomHeight;
         const float currentBottom = door.bottomHeight + ds->openFraction * doorHeight;
         if (currentBottom >= door.topHeight) { continue; }
-        rc.wallRenderer.DrawWall(fb, eyePos, cosA, sinA,
+        rc.wallRenderer.DrawWall(fb, cam,
             door.wallStart, door.wallEnd,
             currentBottom, door.topHeight,
-            horizonY, activeLights, 0.15f, noSun,
+            activeLights, 0.15f, noSun,
             app.assets.GetTexture(TextureId::Wall));
+    }
+
+    // --- 3D mesh objects ---------------------------------------------------
+    // Real polygon-rendered solids (no texture): flat-shaded from the face
+    // normal and z-buffered against the rest of the world. Meshes are always
+    // lit by the sun so their faces read as 3D regardless of the shadows
+    // setting; point lights still respect the toggle via activeLights.
+    if (!app.map.MeshObjects().empty()) {
+        static const Mesh kCube = MakeCube(1.0f);  // unit cube, scaled per object
+        const uint32_t kMeshColor = Framebuffer::MakeColor(190, 140, 100);
+        for (const MeshObjectDef& obj : app.map.MeshObjects()) {
+            rc.meshRenderer.DrawMesh(fb, cam,
+                obj.position, obj.yaw, obj.scale, kCube, kMeshColor,
+                activeLights, 0.15f, sunLight);
+        }
     }
 
     constexpr float kOutAmb = 0.4f, kInAmb = 0.15f;
@@ -946,15 +965,15 @@ static void Render(AppState& app) {
             case SpriteType::Column:    tex = &app.assets.GetTexture(TextureId::Column);    amb = kInAmb; spriteSun = &noSun; break;
             case SpriteType::Bookshelf: tex = &app.assets.GetTexture(TextureId::Bookshelf); amb = kInAmb; spriteSun = &noSun; break;
         }
-        rc.spriteRenderer.DrawSprite(fb, eyePos, cosA, sinA,
+        rc.spriteRenderer.DrawSprite(fb, cam,
             GroundedPosition(sprite.position), sprite.width, sprite.height,
-            horizonY, activeLights, amb, *spriteSun, *tex);
+            activeLights, amb, *spriteSun, *tex);
     }
 
     for (const Pickup& p : app.map.Pickups()) {
         if (!p.collected) {
-            rc.spriteRenderer.DrawSprite(fb, eyePos, cosA, sinA,
-                GroundedPosition(p.position), 0.8f, 0.8f, horizonY, activeLights, kOutAmb,
+            rc.spriteRenderer.DrawSprite(fb, cam,
+                GroundedPosition(p.position), 0.8f, 0.8f, activeLights, kOutAmb,
                 shadowsOn ? sunLight : noSun,
                 p.healthAmount > 0 ? app.assets.GetTexture(TextureId::Medkit)
                                    : app.assets.GetTexture(TextureId::Ammo));
@@ -987,19 +1006,19 @@ static void Render(AppState& app) {
 
         const Vector3 groundedEnemyPosition = GroundedPosition(e.Position());
         if (!e.IsAlive()) {
-            rc.spriteRenderer.DrawSprite(fb, eyePos, cosA, sinA,
-                groundedEnemyPosition, corpseWidth, corpseHeight, horizonY, activeLights, kInAmb, noSun,
+            rc.spriteRenderer.DrawSprite(fb, cam,
+                groundedEnemyPosition, corpseWidth, corpseHeight, activeLights, kInAmb, noSun,
                 app.assets.GetTexture(corpseTex));
             continue;
         }
-        rc.spriteRenderer.DrawSprite(fb, eyePos, cosA, sinA,
-            groundedEnemyPosition, width, height, horizonY, activeLights, kInAmb, noSun,
+        rc.spriteRenderer.DrawSprite(fb, cam,
+            groundedEnemyPosition, width, height, activeLights, kInAmb, noSun,
             app.assets.GetTexture(tex), e.IsHurt());
     }
 
     for (const Projectile& p : app.projectiles) {
-        rc.spriteRenderer.DrawSprite(fb, eyePos, cosA, sinA,
-            p.position, 0.45f, 0.45f, horizonY, activeLights, 1.0f, noSun,
+        rc.spriteRenderer.DrawSprite(fb, cam,
+            p.position, 0.45f, 0.45f, activeLights, 1.0f, noSun,
             app.assets.GetTexture(TextureId::Projectile));
     }
 
@@ -1010,8 +1029,8 @@ static void Render(AppState& app) {
         Vector3 gatePosition{
             (trigger.minX + trigger.maxX) * 0.5f, 0.0f,
             (trigger.minZ + trigger.maxZ) * 0.5f};
-        rc.spriteRenderer.DrawSprite(fb, eyePos, cosA, sinA,
-            GroundedPosition(gatePosition), trigger.maxX - trigger.minX, 4.0f, horizonY,
+        rc.spriteRenderer.DrawSprite(fb, cam,
+            GroundedPosition(gatePosition), trigger.maxX - trigger.minX, 4.0f,
             activeLights, 1.0f, noSun,
             app.assets.GetTexture(TextureId::ExitGate));
     }
@@ -1026,8 +1045,8 @@ static void Render(AppState& app) {
             case KeyColour::Yellow: texId = TextureId::KeyYellow; break;
             default: break;
         }
-        rc.spriteRenderer.DrawSprite(fb, eyePos, cosA, sinA,
-            GroundedPosition(keyDef.position), 0.5f, 0.7f, horizonY, activeLights,
+        rc.spriteRenderer.DrawSprite(fb, cam,
+            GroundedPosition(keyDef.position), 0.5f, 0.7f, activeLights,
             kInAmb, noSun, app.assets.GetTexture(texId));
     }
 

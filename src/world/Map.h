@@ -23,6 +23,7 @@ public:
     const std::vector<Pickup>&      Pickups()      const { return m_pickups; }
     const std::vector<PointLight>&  PointLights()  const { return m_pointLights; }
     const std::vector<ExitTrigger>& ExitTriggers() const { return m_exitTriggers; }
+    const std::vector<MeshObjectDef>& MeshObjects() const { return m_meshObjects; }
     bool HasMarsTerrain() const { return m_levelData.marsTerrain; }
     int  WallCount() const;
     bool IsPositionBlocked(const Vector3& position, float radius) const;
@@ -52,6 +53,7 @@ private:
     std::vector<Pickup>       m_pickups;
     std::vector<PointLight>   m_pointLights;
     std::vector<ExitTrigger>  m_exitTriggers;
+    std::vector<MeshObjectDef> m_meshObjects;
     // v2 mutable pickup state (collected flag lives here, not in LevelData)
     std::vector<ArmorPickupDef> m_armorPickups;
     std::vector<AudiologDef>    m_audiologs;

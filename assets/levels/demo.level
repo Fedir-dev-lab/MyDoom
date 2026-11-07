@@ -73,6 +73,16 @@ msgtrigger 2 -3.0 18.5 3.0 21.0 COURTYARD REACHED - CROSS TO TELEPORTER
 # Exit teleporter at the far northern edge of the courtyard leading to Level 2 (finale)
 exit 0 finale -3.0 45.0 3.0 49.0
 
+# ---------------------------------------------------------------------------
+# 3D mesh objects — real polygon-rendered solids (no texture), flat-shaded.
+# These teach the engine to draw true 3D objects (cubes here). A small rotated
+# cube sits in the starting room; a large rotated cube stands in the open
+# courtyard. Both sit on the floor (centre y = scale/2).
+#   mesh <id> <type> <x> <y> <z> <scale> [yaw]
+# ---------------------------------------------------------------------------
+mesh 0 cube  2.0 0.5  3.0 1.0 0.4
+mesh 1 cube -6.0 1.0 40.0 2.0 0.6
+
 light 0 -5.0 3.0 27.0 10.0 1.0
 light 1  6.0 3.0 36.0 10.0 1.0
 light 2 -8.0 3.0 44.0 10.0 1.0

@@ -78,6 +78,7 @@ std::optional<LoadedLevel> LevelLoader::Load(const std::string& path,
     std::unordered_map<int, bool> audioIds;
     std::unordered_map<int, bool> armorIds;
     std::unordered_map<int, bool> hazardIds;
+    std::unordered_map<int, bool> meshIds;
     bool hasVersion = false;
     bool hasName = false;
     bool hasSpawn = false;
@@ -533,6 +534,39 @@ std::optional<LoadedLevel> LevelLoader::Load(const std::string& path,
             hazard.hazardId = id;
             hazardIds[id] = true;
             level.data.hazards.push_back(hazard);
+        } else if (command == "mesh") {
+            // mesh <id> <type> <x> <y> <z> <scale> [yaw]
+            //   type must be "cube" (the only procedural mesh so far).
+            //   yaw is optional and defaults to 0.
+            int id = 0;
+            std::string typeToken;
+            MeshObjectDef meshObj;
+            if (!ReadInt(input, id) || id < 0 || meshIds.contains(id) ||
+                !(input >> typeToken) || typeToken != "cube" ||
+                !ReadFloat(input, meshObj.position.x) ||
+                !ReadFloat(input, meshObj.position.y) ||
+                !ReadFloat(input, meshObj.position.z) ||
+                !ReadFloat(input, meshObj.scale) ||
+                meshObj.scale <= 0.0f) {
+                error = ErrorAt(lineNumber,
+                    "invalid mesh declaration "
+                    "(expected: mesh <id> cube <x> <y> <z> <scale> [yaw])");
+                return std::nullopt;
+            }
+            // Optional yaw rotation about Y (radians).
+            float yaw = 0.0f;
+            if (input >> yaw) {
+                meshObj.yaw = yaw;
+            }
+            input.clear();  // a failed optional read must not mask trailing junk
+            if (!IsEndOfCommand(input)) {
+                error = ErrorAt(lineNumber, "mesh: unexpected extra fields");
+                return std::nullopt;
+            }
+            meshObj.meshId = id;
+            meshObj.type   = MeshType::Cube;
+            meshIds[id]    = true;
+            level.data.meshObjects.push_back(meshObj);
         } else {
             error = ErrorAt(lineNumber, "unknown command: " + command);
             return std::nullopt;

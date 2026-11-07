@@ -55,5 +55,6 @@ LevelData CreateDemoLevel() {
         {},    // audiologs
         {},    // armorPickups
         {},    // hazards
+        {},    // meshObjects
     };
 }

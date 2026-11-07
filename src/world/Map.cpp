@@ -21,6 +21,7 @@ Map::Map(LevelData levelData)
       m_pickups(std::move(levelData.pickups)),
       m_pointLights(std::move(levelData.pointLights)),
       m_exitTriggers(std::move(levelData.exitTriggers)),
+      m_meshObjects(std::move(levelData.meshObjects)),
       m_armorPickups(m_levelData.armorPickups),      // mutable copy for collected state
       m_audiologs(m_levelData.audiologs) {            // mutable copy for collected state
 }

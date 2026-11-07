@@ -1,42 +1,31 @@
 #pragma once
 
-#include <cstdint>
 #include <vector>
 
 #include "core/Vector3.h"
+#include "renderer/Camera.h"
 #include "renderer/Lighting.h"
 
 class Framebuffer;
 class Texture;
 
-// Projects vertical walls from the X/Z world plane into the framebuffer.
+// Renders vertical wall quads as true 3D polygons. Because the camera now
+// pitches for real, a wall is a general on-screen quadrilateral (its vertical
+// edges slant under pitch), so it is rasterised as a perspective-correct
+// textured quad (near-clipped, Gouraud-lit, z-buffered) rather than column by
+// column.
 class WallRenderer {
 public:
     WallRenderer(int screenWidth, int screenHeight, float fieldOfViewRadians);
 
-    // cosAngle/sinAngle are std::cos/sin of the camera yaw, precomputed by
-    // the caller once per frame so 17 wall draws don't recompute them.
-    void DrawWall(Framebuffer& framebuffer,
-                  const Vector3& cameraPosition, float cosAngle, float sinAngle,
+    void DrawWall(Framebuffer& framebuffer, const Camera& camera,
                   Vector3 start, Vector3 end,
                   float bottomHeight, float topHeight,
-                  float horizonY,
                   const std::vector<PointLight>& lights, float ambientLight,
                   const DirectionalLight& sunLight,
                   const Texture& texture) const;
 
 private:
-    struct ViewPoint {
-        float x;
-        float z;
-    };
-
-    ViewPoint ToViewSpace(const Vector3& point,
-                          const Vector3& cameraPosition,
-                          float cosAngle, float sinAngle) const;
-
     int m_screenWidth;
     int m_screenHeight;
-    float m_focalLength;
-    float m_halfWidth;
 };

@@ -9,6 +9,10 @@
 #include "Lighting.h"
 #include "Texture.h"
 
+namespace {
+constexpr float kNearPlane = 0.05f;
+}  // namespace
+
 PlaneRenderer::PlaneRenderer(int screenWidth, int screenHeight, float fieldOfViewRadians)
     : m_screenWidth(screenWidth),
       m_screenHeight(screenHeight),
@@ -18,55 +22,40 @@ PlaneRenderer::PlaneRenderer(int screenWidth, int screenHeight, float fieldOfVie
 }
 
 // ---------------------------------------------------------------------------
-// DrawPlane — scanline rasteriser with per-row span clipping
+// DrawPlane — scanline rasteriser with per-row span clipping.
 //
-// For each screen row we need the range of screen columns [spanMin, spanMax]
-// that falls inside the sector polygon.  The correct way to find this is to
-// intersect each polygon edge with the scanline's world ray and collect the
-// resulting screen-column crossings.
+// For a horizontal plane at world height H, every screen row maps to a line in
+// the world X/Z plane. With a true-pitch camera the view ray for pixel (x,y)
+// has a world-Y direction component that depends only on the row:
 //
-// Per-row setup (done once per row, shared by all edges):
-//   viewZ    = (height - camY) * focalLength / (horizonY - y)
-//   rowScale = viewZ / focalLength
-//   worldX(x)= camX + (x - halfW) * rowScale * cosAngle + viewZ * sinAngle
-//   worldZ(x)= camZ - (x - halfW) * rowScale * sinAngle + viewZ * cosAngle
+//   dCamY       = (halfH - y) / focal            (up component, unit depth)
+//   dWorldY     = dCamY*cosPitch - sinPitch       (independent of column x)
+//   t           = (H - camY) / dWorldY            (distance along the ray)
+//   depth       = t                               (= viewZ, constant per row)
+//   worldX(x)   = camX + t*(right.x*dCamX + up.x*dCamY + forward.x)
+//   worldZ(x)   = camZ + t*(right.z*dCamX + up.z*dCamY + forward.z)
 //
-// Inverting worldX/worldZ for the screen column x is exact and cheap:
-//   camRelX = relX * cosAngle - relZ * sinAngle   (right component)
-//   x = halfW + camRelX * focalLength / viewZ
+// where dCamX = (x - halfW)/focal. worldX/worldZ are therefore linear in the
+// screen column x, so the existing edge-crossing span math transfers directly.
 //
-// For each polygon edge (A→B) we solve for the screen column where the
-// edge crosses this row's world ray plane, using the parametric
-// line–line intersection in world X/Z:
-//
-//   P(t) = A + t*(B-A)   (edge, t∈[0,1])
-//   Q(s) = origin + s*dir  (ray direction along the scanline)
-//
-// Then x = halfW + camX(P(t)) * focalLength / viewZ.
-//
-// This gives exactly one crossing per edge per row (or none if parallel).
-// Collecting all crossings and sorting them gives the correct fill span,
-// correctly handling concave polygons and all camera angles.
+// At pitch 0: dWorldY = dCamY, t = (H-camY)*focal/(halfH-y) and worldX0/dWorldX
+// reduce to the old yaw-only formulas with horizonY = halfH — i.e. identical.
 // ---------------------------------------------------------------------------
-
-void PlaneRenderer::DrawPlane(Framebuffer& framebuffer, const Vector3& cameraPosition,
-                              float cosAngle, float sinAngle,
-                              float height,
-                              const std::vector<Vector2>& polygon,
-                              float horizonY,
+void PlaneRenderer::DrawPlane(Framebuffer& framebuffer, const Camera& cam,
+                              float height, const std::vector<Vector2>& polygon,
                               const std::vector<PointLight>& lights, float ambientLight,
                               const DirectionalLight& sunLight,
                               const Texture& texture) const {
-    if (polygon.size() < 3 || height == cameraPosition.y) {
+    if (polygon.size() < 3 || height == cam.position.y) {
         return;
     }
 
-    const bool isFloor = height < cameraPosition.y;
+    const bool isFloor = height < cam.position.y;
+    const float horizonRow = cam.HorizonRow();
     const int firstRow = std::max(0,
-        isFloor ? static_cast<int>(horizonY) + 1 : 0);
+        isFloor ? static_cast<int>(horizonRow) + 1 : 0);
     const int lastRow  = std::min(m_screenHeight - 1,
-        isFloor ? m_screenHeight - 1 : static_cast<int>(horizonY) - 1);
-
+        isFloor ? m_screenHeight - 1 : static_cast<int>(horizonRow) - 1);
     if (firstRow > lastRow) { return; }
 
     // AABB for point-light pre-filter.
@@ -90,18 +79,27 @@ void PlaneRenderer::DrawPlane(Framebuffer& framebuffer, const Vector3& cameraPos
         ? std::min(1.0f, ambientLight + sunLight.intensity * 0.6f)
         : ambientLight;
 
-    const float heightDiffFocal = (height - cameraPosition.y) * m_focalLength;
+    const float invFocal = 1.0f / m_focalLength;
+    const float halfH = static_cast<float>(m_screenHeight) * 0.5f;
     const size_t polySize = polygon.size();
 
-    // Pre-project all polygon vertices into camera-relative X (right component)
-    // once — this part does not depend on viewZ so it is constant per DrawPlane.
-    // camRelX[i] = (polygon[i].x - camX)*cosAngle - (polygon[i].y - camZ)*sinAngle
-    std::vector<float> camRelX(polySize);
-    for (size_t i = 0; i < polySize; ++i) {
-        const float rx = polygon[i].x - cameraPosition.x;
-        const float rz = polygon[i].y - cameraPosition.z;
-        camRelX[i] = rx * cosAngle - rz * sinAngle;
-    }
+    // Per-row view setup (true pitch). depth = t = viewZ.
+    auto setupRow = [&](int y, float& depth,
+                        float& worldX0, float& dWorldX,
+                        float& worldZ0, float& dWorldZ) -> bool {
+        const float dCamY = (halfH - static_cast<float>(y)) * invFocal;
+        const float dWorldY = dCamY * cam.cosPitch - cam.sinPitch;
+        if (std::fabs(dWorldY) < 1e-6f) { return false; }
+        const float t = (height - cam.position.y) / dWorldY;
+        if (t <= kNearPlane) { return false; }
+        const float dCamX0 = -m_halfWidth * invFocal;          // at column 0
+        worldX0 = cam.position.x + t * (cam.right.x * dCamX0 + cam.up.x * dCamY + cam.forward.x);
+        dWorldX = t * cam.right.x * invFocal;
+        worldZ0 = cam.position.z + t * (cam.right.z * dCamX0 + cam.up.z * dCamY + cam.forward.z);
+        dWorldZ = t * cam.right.z * invFocal;
+        depth = t;
+        return true;
+    };
 
     // Per-row span table (stack-allocated for the common case).
     const int rowCount = lastRow - firstRow + 1;
@@ -124,68 +122,13 @@ void PlaneRenderer::DrawPlane(Framebuffer& framebuffer, const Vector3& cameraPos
         spanMax[i] = -std::numeric_limits<float>::max();
     }
 
-    // -----------------------------------------------------------------------
-    // Span building: for every polygon edge A→B find the exact screen column
-    // where it crosses each scanline row.
-    //
-    // The world ray for row y is parameterised by screen column x:
-    //   worldX(x) = camX + (x - halfW) * rowScale * cosAngle + viewZ * sinAngle
-    //   worldZ(x) = camZ - (x - halfW) * rowScale * sinAngle + viewZ * cosAngle
-    //
-    // The edge is: P(t) = A + t*(B-A), t∈[0,1].
-    //
-    // The camera-space X of a world point (wx,wz) is:
-    //   camX(wx,wz) = (wx-camX)*cosAngle - (wz-camZ)*sinAngle
-    //
-    // By linearity:
-    //   camX(P(t)) = camRelX[A] + t*(camRelX[B]-camRelX[A])
-    //
-    // This is a linear function of t and does NOT depend on viewZ (the
-    // forward component cancels).  The screen column of the crossing is:
-    //   screenX(t) = halfW + camX(P(t)) * focalLength / viewZ
-    //
-    // We need the value of t where the scanline ray passes through the edge,
-    // i.e. we need P(t) to lie on the scanline.  But ANY t∈[0,1] gives a
-    // valid edge crossing — we just need ONE crossing per edge per row.
-    //
-    // The approach: for each row, compute screenX at t=0 and t=1 (the two
-    // projected vertices), then find whether the scanline's world-Z window
-    // [worldZmin, worldZmax] intersects the edge's world-Z range, and if so
-    // use linear interpolation in world-Z to find the crossing t, then
-    // compute its screen column.
-    //
-    // World-Z of P(t): wz(t) = A.z + t*(B.z-A.z)
-    // The scanline's world-Z range is not a single value — it spans the
-    // entire visible row.  So we cannot clip by Z directly.
-    //
-    // CORRECT approach: treat each polygon edge as a line segment in world
-    // X/Z and find the screen column of its intersection with the world ray
-    // that corresponds to each screen row, exactly as the original
-    // IsPointInPolygon + edge scan did.
-    //
-    // The original code solved this correctly via:
-    //   s = (edgeDeltaX*(Aw-worldX0) - edgeDeltaZ*(Az-worldZ0)) / edgeDenom
-    // where s is the screen-column offset from x=0.  We replicate that here,
-    // but precompute the per-row (worldX0, dWorldX, worldZ0, dWorldZ) once
-    // and reuse them for all edges on that row.
-    // -----------------------------------------------------------------------
+    // Span building: for every polygon edge A→B find the screen column where
+    // the row's world line crosses it.
     for (int y = firstRow; y <= lastRow; ++y) {
-        const float denom = horizonY - static_cast<float>(y);
-        if (denom == 0.0f) { continue; }
-        const float viewZ = heightDiffFocal / denom;
-        if (viewZ <= 0.0f) { continue; }
-
-        const float rowScale = viewZ / m_focalLength;
-        // World position at screen column 0:
-        const float worldX0 = cameraPosition.x
-                              + (-m_halfWidth) * rowScale * cosAngle
-                              + viewZ * sinAngle;
-        const float worldZ0 = cameraPosition.z
-                              - (-m_halfWidth) * rowScale * sinAngle
-                              + viewZ * cosAngle;
-        // World-space step per screen column:
-        const float dWorldX = rowScale * cosAngle;
-        const float dWorldZ = -rowScale * sinAngle;
+        float depth, worldX0, dWorldX, worldZ0, dWorldZ;
+        if (!setupRow(y, depth, worldX0, dWorldX, worldZ0, dWorldZ)) {
+            continue;
+        }
 
         const int ri = y - firstRow;
         float rowMin = std::numeric_limits<float>::max();
@@ -196,23 +139,15 @@ void PlaneRenderer::DrawPlane(Framebuffer& framebuffer, const Vector3& cameraPos
             const Vector2& a = polygon[i];
             const Vector2& b = polygon[j];
             const float ex = b.x - a.x;
-            const float ey = b.y - a.y; // world Z delta
+            const float ey = b.y - a.y;  // world Z delta
 
-            // edgeDenom = cross(dWorld, edge) in X/Z plane
             const float edgeDenom = -ey * dWorldX + ex * dWorldZ;
-            if (std::abs(edgeDenom) < 1e-7f) { continue; } // parallel
+            if (std::abs(edgeDenom) < 1e-7f) { continue; }  // parallel
 
-            // Parameter s = screen column offset from 0 where ray hits edge
             const float s = (-ey * (a.x - worldX0) + ex * (a.y - worldZ0)) / edgeDenom;
 
             // Verify t (position along edge) is in [0,1]. This is the only
-            // validity check we need: it guarantees the crossing lies on the
-            // edge segment, which in turn bounds it to the polygon's extent.
-            // We deliberately do NOT clip s to the screen here — discarding
-            // off-screen crossings would empty the span whenever the polygon
-            // is wider than the screen (i.e. for every row closer than the
-            // far wall), making the floor/ceiling vanish. The fill pass
-            // clamps the final span to the screen bounds.
+            // validity check needed; the fill pass clamps the span to screen.
             const float t = (std::abs(ex) >= std::abs(ey))
                 ? ((worldX0 + s * dWorldX) - a.x) / ex
                 : ((worldZ0 + s * dWorldZ) - a.y) / ey;
@@ -226,9 +161,7 @@ void PlaneRenderer::DrawPlane(Framebuffer& framebuffer, const Vector3& cameraPos
         spanMax[ri] = rowMax;
     }
 
-    // -----------------------------------------------------------------------
-    // Pixel fill pass (unchanged from original).
-    // -----------------------------------------------------------------------
+    // Pixel fill pass.
     for (int y = firstRow; y <= lastRow; ++y) {
         const int ri = y - firstRow;
         if (spanMin[ri] > spanMax[ri]) { continue; }
@@ -237,20 +170,10 @@ void PlaneRenderer::DrawPlane(Framebuffer& framebuffer, const Vector3& cameraPos
         const int lastX  = std::min(m_screenWidth - 1, static_cast<int>(std::ceil(spanMax[ri])));
         if (firstX > lastX) { continue; }
 
-        const float denom = horizonY - static_cast<float>(y);
-        if (denom == 0.0f) { continue; }
-        const float viewZ = heightDiffFocal / denom;
-        if (viewZ <= 0.0f) { continue; }
-
-        const float rowScale = viewZ / m_focalLength;
-        const float worldX0 = cameraPosition.x
-                              + (-m_halfWidth) * rowScale * cosAngle
-                              + viewZ * sinAngle;
-        const float worldZ0 = cameraPosition.z
-                              - (-m_halfWidth) * rowScale * sinAngle
-                              + viewZ * cosAngle;
-        const float dWorldX = rowScale * cosAngle;
-        const float dWorldZ = -rowScale * sinAngle;
+        float depth, worldX0, dWorldX, worldZ0, dWorldZ;
+        if (!setupRow(y, depth, worldX0, dWorldX, worldZ0, dWorldZ)) {
+            continue;
+        }
 
         const size_t rowBase = static_cast<size_t>(y) * m_screenWidth;
         float worldX = worldX0 + static_cast<float>(firstX) * dWorldX;
@@ -259,7 +182,7 @@ void PlaneRenderer::DrawPlane(Framebuffer& framebuffer, const Vector3& cameraPos
         if (isConstantLit) {
             for (int x = firstX; x <= lastX; ++x, worldX += dWorldX, worldZ += dWorldZ) {
                 const uint32_t texel = texture.Sample(worldX * 0.5f, worldZ * 0.5f);
-                framebuffer.SetPixelDepthFast(rowBase + x, ApplyLight(texel, constantLit), viewZ);
+                framebuffer.SetPixelDepthFast(rowBase + x, ApplyLight(texel, constantLit), depth);
             }
         } else {
             int x = firstX;
@@ -283,12 +206,12 @@ void PlaneRenderer::DrawPlane(Framebuffer& framebuffer, const Vector3& cameraPos
                                                         worldZ += dWorldZ, lit += dLit) {
                     const uint32_t texel = texture.Sample(worldX * 0.5f, worldZ * 0.5f);
                     framebuffer.SetPixelDepthFast(rowBase + x,
-                                                  ApplyLight(texel, lit), viewZ);
+                                                  ApplyLight(texel, lit), depth);
                 }
                 if (x == lastX) {
                     const uint32_t texel = texture.Sample(worldX * 0.5f, worldZ * 0.5f);
                     framebuffer.SetPixelDepthFast(rowBase + x,
-                                                  ApplyLight(texel, nextLit), viewZ);
+                                                  ApplyLight(texel, nextLit), depth);
                     break;
                 }
                 curLit = nextLit;
