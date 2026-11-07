@@ -1,0 +1,22 @@
+build/
+build-*/
+dist/
+out/
+.cache/
+compile_commands.json
+*.o
+*.obj
+*.exe
+.vscode/ipch/
+CMakeFiles/
+CMakeCache.txt
+
+dist-win/
+*.tar.gz
+*.mdpk
+*.zip
+
+# Saves/logs are runtime data, never part of the project or a release
+saves/
+userdata/
+*.dat

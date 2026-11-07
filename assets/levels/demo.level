@@ -1,0 +1,81 @@
+# MyDoomEngine demo level
+version 1
+name demo
+spawn 0.0 1.0 0.0 0.0 0.0
+
+sector 0 0.0 2.0 0 0 0.15
+vertex 0 -6.0 -6.0
+vertex 0  6.0 -6.0
+vertex 0  6.0  6.0
+vertex 0 -6.0  6.0
+wall 0 -6.0  6.0 -1.0  6.0 default default block
+wall 0  1.0  6.0  6.0  6.0 default default block
+wall 0 -1.0  6.0  1.0  6.0 2.0 3.0 pass
+wall 0  6.0  6.0  6.0 -6.0 default default block
+wall 0  6.0 -6.0 -6.0 -6.0 default default block
+wall 0 -6.0 -6.0 -6.0  6.0 default default block
+
+sector 1 0.0 3.0 1 1 0.15
+vertex 1 -6.0  6.0
+vertex 1  6.0  6.0
+vertex 1  6.0 18.0
+vertex 1 -6.0 18.0
+wall 1 -6.0  6.0 -1.0  6.0 default default block
+wall 1  1.0  6.0  6.0  6.0 default default block
+wall 1  6.0  6.0  6.0 18.0 default default block
+wall 1 -6.0 18.0 -6.0  6.0 default default block
+
+sector 2 0.0 open 2 0 0.40
+vertex 2 -14.0 18.0
+vertex 2  14.0 18.0
+vertex 2  14.0 50.0
+vertex 2 -14.0 50.0
+wall 2 -14.0 18.0 -2.0 18.0 default 3.0 block
+wall 2   2.0 18.0 14.0 18.0 default 3.0 block
+wall 2  14.0 18.0 14.0 50.0 default 3.0 block
+wall 2  14.0 50.0 -14.0 50.0 default 3.0 block
+wall 2 -14.0 50.0 -14.0 18.0 default 3.0 block
+
+sprite 0 lamp         -5.0 0.0 27.0 1.0 3.0
+sprite 1 lamp          6.0 0.0 36.0 1.0 3.0
+sprite 2 lamp         -8.0 0.0 44.0 1.0 3.0
+sprite 3 ceiling_lamp  0.0 0.0  0.0 0.7 2.0
+sprite 4 column       -5.0 0.0 -4.5 0.8 2.0
+sprite 5 bookshelf     5.0 0.0 -2.0 1.2 2.0
+sprite 6 ceiling_lamp  0.0 0.0 12.0 0.7 3.0
+sprite 7 barrel        5.0 0.0  8.0 0.9 1.2
+sprite 8 barrel       -5.0 0.0 16.0 0.9 1.2
+sprite 9 barrel       10.0 0.0 22.0 0.9 1.2
+sprite 10 barrel     -10.0 0.0 30.0 0.9 1.2
+
+pickup 0 health  3.0 0.0 29.0 3
+pickup 1 ammo   -3.0 0.0 33.0 12
+
+enemy 0 chaser   0.0 0.0 30.0
+enemy 1 shooter -3.0 0.0 14.0
+enemy 2 tank     0.0 0.0 42.0
+
+# Door between room 0 and room 1: spans the 2m opening at Z=6.
+# Press E to open/close.
+door 0 -1.0 6.0 1.0 6.0 default 2.0
+
+# Door between room 1 and courtyard: locked, requires red key.
+door 1 -2.0 18.0 2.0 18.0 default 3.0 red
+
+# Red key in room 1 to unlock the courtyard door
+key 0 red 4.0 0.0 14.0
+
+# Helpful hint triggers
+msgtrigger 0 -2.0 -2.0 2.0 2.0 FIND THE RED KEY TO UNLOCK THE COURTYARD
+msgtrigger 1 -2.0 16.0 2.0 17.5 COURTYARD DOOR REQUIRES RED KEY
+msgtrigger 2 -3.0 18.5 3.0 21.0 COURTYARD REACHED - CROSS TO TELEPORTER
+
+# Exit teleporter at the far northern edge of the courtyard leading to Level 2 (finale)
+exit 0 finale -3.0 45.0 3.0 49.0
+
+light 0 -5.0 3.0 27.0 10.0 1.0
+light 1  6.0 3.0 36.0 10.0 1.0
+light 2 -8.0 3.0 44.0 10.0 1.0
+light 3  0.0 1.6  0.0  7.0 1.0
+light 4  0.0 2.4 12.0  8.0 1.0
+light 5  0.0 3.0 47.0 10.0 1.0

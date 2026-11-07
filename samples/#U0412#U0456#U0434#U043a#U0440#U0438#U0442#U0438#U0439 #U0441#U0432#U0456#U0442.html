@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>Герой у відкритому світі</title>
+<style>
+:root{--hb:rgba(8,10,14,.55);--hf:#f2f5f9;--ab:rgba(255,255,255,.2);--on:rgba(90,170,255,.65);box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--hb:rgba(0,0,0,.6);--ab:rgba(255,255,255,.14)}}
+:root[data-theme="dark"]{--hb:rgba(0,0,0,.6);--ab:rgba(255,255,255,.14)}
+html,body{height:100%;margin:0;overflow:hidden;background:#000;color:var(--hf);font:13px/1.35 system-ui,-apple-system,sans-serif;touch-action:none;user-select:none;-webkit-user-select:none}
+#c{position:fixed;inset:0;width:100%;height:100%}
+#top{position:fixed;left:8px;top:calc(env(safe-area-inset-top,0px) + 8px);display:flex;flex-direction:column;gap:6px;max-width:calc(100% - 135px)}
+#hud{background:var(--hb);padding:6px 8px;border-radius:8px;white-space:pre;pointer-events:none}
+#tb{background:var(--hb);padding:5px 8px;border-radius:8px;display:flex;gap:8px;align-items:center}
+#tb input[type=range]{flex:1;min-width:0}
+#mm{position:fixed;right:8px;top:calc(env(safe-area-inset-top,0px) + 8px);width:110px;height:110px;border-radius:8px;border:1px solid rgba(255,255,255,.3)}
+#joy{position:fixed;left:18px;bottom:calc(env(safe-area-inset-bottom,0px) + 22px);width:120px;height:120px;border-radius:50%;background:var(--ab);touch-action:none}
+#knob{position:absolute;left:35px;top:35px;width:50px;height:50px;border-radius:50%;background:rgba(255,255,255,.55);pointer-events:none}
+#bt{position:fixed;right:14px;bottom:calc(env(safe-area-inset-bottom,0px) + 22px);display:grid;grid-template-columns:repeat(2,66px);gap:8px}
+#bt button{height:56px;border:0;border-radius:12px;background:var(--ab);color:var(--hf);font-size:13px;touch-action:none}
+#bt button.on{background:var(--on)}
+#load{position:fixed;inset:0;background:#0b0d11;display:flex;align-items:center;justify-content:center;font-size:16px;z-index:9}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="top"><div id="hud"></div>
+<div id="tb">🕒<input type="range" id="tm" min="0" max="24" step="0.05" value="10"><label><input type="checkbox" id="au" checked> цикл</label></div></div>
+<canvas id="mm" width="110" height="110"></canvas>
+<div id="joy"><div id="knob"></div></div>
+<div id="bt"><button data-b="run">Біг</button><button data-b="jump">Стрибок</button><button data-b="sneak">Скрадання</button><button data-b="prone">Лежачи</button></div>
+<div id="load">Розрахунок карти 5000×5000 м…</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+const $=id=>document.getElementById(id), N=5000, WL=28, CH=64, NC=79;
+const clamp=(v,a,b)=>Math.min(b,Math.max(a,v)), sm=(a,b,x)=>{const t=clamp((x-a)/(b-a),0,1);return t*t*(3-2*t)};
+
+// ---------- Процедурна карта (детермінована) ----------
+const hs=(x,y)=>{let h=Math.imul(x,374761393)+Math.imul(y,668265263);h=Math.imul(h^(h>>>13),1274126177);return((h^(h>>>16))>>>0)/4294967296};
+const vn=(x,y)=>{const i=Math.floor(x),j=Math.floor(y),u=x-i,v=y-j,s=t=>t*t*(3-2*t),a=hs(i,j),b=hs(i+1,j),c=hs(i,j+1),d=hs(i+1,j+1),p=s(u),q=s(v);return a+(b-a)*p+(c-a)*q+(a-b-c+d)*p*q};
+function fbm(x,z){let s=0,a=.5,f=1/700;for(let o=0;o<5;o++){s+=vn(x*f+o*17,z*f+o*31)*a;a/=2;f*=2}return s/.96875}
+function rawH(x,z){const n=fbm(x,z);let h=n*n*220;const d=Math.min(x,z,N-x,N-z);if(d<450){const e=(450-d)/450;h+=e*e*320}return h}
+const houses=[[2545,2520],[2440,2590],[2630,2440]].map(([x,z])=>({x,z,base:Math.max(rawH(x,z),WL+4)}));
+function hAt(x,z){let h=rawH(x,z);for(const b of houses){const d=Math.hypot(x-b.x,z-b.z);if(d<70){const t=d<30?1:1-(d-30)/40;h+=(b.base-h)*t*t*(3-2*t)}}return h}
+function slopeAt(x,z){const e=.5;return Math.hypot(hAt(x+e,z)-hAt(x-e,z),hAt(x,z+e)-hAt(x,z-e))}
+function treeAt(gx,gz){
+ if(hs(gx,gz+9999)>.3)return null;
+ const x=(gx+hs(gx+5,gz))*8,z=(gz+hs(gx,gz+5))*8;
+ if(x<20||z<20||x>N-20||z>N-20)return null;
+ const h=hAt(x,z);if(h<WL+2.5||h>105||slopeAt(x,z)>.55)return null;
+ for(const b of houses)if(Math.hypot(x-b.x,z-b.z)<45)return null;
+ return{x,z,h,s:.8+hs(gx+3,gz+3)*.7};
+}
+
+// ---------- Three.js сцена ----------
+const cv=$('c'),renderer=new THREE.WebGLRenderer({canvas:cv,antialias:false});
+renderer.setPixelRatio(Math.min(devicePixelRatio,1.5));
+const scene=new THREE.Scene();scene.background=new THREE.Color(0x88bbee);scene.fog=new THREE.Fog(0x88bbee,450,1500);
+const camera=new THREE.PerspectiveCamera(70,1,.1,1500);camera.rotation.order='YXZ';
+function resize(){const w=innerWidth,h=innerHeight,a=w/h;renderer.setSize(w,h,false);camera.aspect=a;camera.fov=clamp(2*Math.atan(Math.tan(40*Math.PI/180)/a)*180/Math.PI,40,105);camera.updateProjectionMatrix()}
+addEventListener('resize',resize);resize();
+const hemi=new THREE.HemisphereLight(0xffffff,0x44402e,.6),sun=new THREE.DirectionalLight(0xfff1d6,1),moon=new THREE.DirectionalLight(0x8aa4ff,0),torch=new THREE.PointLight(0xffe2b0,0,38,1.5);
+scene.add(hemi,sun,sun.target,moon,moon.target,torch);
+const water=new THREE.Mesh(new THREE.PlaneGeometry(3300,3300),new THREE.MeshLambertMaterial({color:0x2a6f9a,transparent:true,opacity:.75}));
+water.rotation.x=-Math.PI/2;water.position.y=WL;scene.add(water);
+const sp=new Float32Array(2100);for(let i=0;i<700;i++){const u=Math.random()*6.283,v=Math.acos(Math.random());sp[i*3]=1000*Math.sin(v)*Math.cos(u);sp[i*3+1]=1000*Math.cos(v);sp[i*3+2]=1000*Math.sin(v)*Math.sin(u)}
+const sg=new THREE.BufferGeometry();sg.setAttribute('position',new THREE.BufferAttribute(sp,3));
+const stars=new THREE.Points(sg,new THREE.PointsMaterial({color:0xffffff,size:2,sizeAttenuation:false,fog:false,transparent:true,opacity:0}));stars.frustumCulled=false;scene.add(stars);
+
+// будинки: стіни з дверним отвором, дах, лампа
+const walls=[],wmat=new THREE.MeshLambertMaterial({color:0xb59d78}),lamps=[];
+function addWall(x0,x1,z0,z1,b){walls.push({x0,x1,z0,z1,top:b+3});const m=new THREE.Mesh(new THREE.BoxGeometry(x1-x0,3.2,z1-z0),wmat);m.position.set((x0+x1)/2,b+1.6,(z0+z1)/2);scene.add(m)}
+houses.forEach(b=>{const x0=b.x-4,x1=b.x+4,z0=b.z-3,z1=b.z+3,t=.3;
+ addWall(x0,x1,z0,z0+t,b.base);addWall(x0,x0+t,z0,z1,b.base);addWall(x1-t,x1,z0,z1,b.base);addWall(x0,b.x-.7,z1-t,z1,b.base);addWall(b.x+.7,x1,z1-t,z1,b.base);
+ const r=new THREE.Mesh(new THREE.BoxGeometry(8.8,.3,6.8),new THREE.MeshLambertMaterial({color:0x6b3f2a}));r.position.set(b.x,b.base+3.35,b.z);scene.add(r);
+ const l=new THREE.PointLight(0xffb870,0,22,1.5);l.position.set(b.x,b.base+2.4,b.z);scene.add(l);lamps.push(l)});
+
+// ---------- Чанки рельєфу з LOD і спідницями ----------
+const terrainMat=new THREE.MeshLambertMaterial({vertexColors:true}),idxCache={};
+function gridIdx(s){if(idxCache[s])return idxCache[s];const a=[],w=s+1;for(let j=0;j<s;j++)for(let i=0;i<s;i++){const p=j*w+i;a.push(p,p+w,p+1,p+1,p+w,p+w+1)}return idxCache[s]=a}
+function buildChunk(cx,cz,lod){
+ const s=[32,8,2][lod],w=s+1,step=CH/s,nv=w*w+4*w,pos=new Float32Array(nv*3),nor=new Float32Array(nv*3),col=new Float32Array(nv*3),e=Math.max(1,step*.5);
+ for(let j=0;j<w;j++)for(let i=0;i<w;i++){
+  const x=cx*CH+i*step,z=cz*CH+j*step,y=hAt(x,z),k=(j*w+i)*3;
+  let nx=hAt(x-e,z)-hAt(x+e,z),nz=hAt(x,z-e)-hAt(x,z+e),ny=2*e;const l=Math.hypot(nx,ny,nz);nx/=l;ny/=l;nz/=l;
+  pos[k]=x;pos[k+1]=y;pos[k+2]=z;nor[k]=nx;nor[k+1]=ny;nor[k+2]=nz;
+  const sl=1-ny;let r,g,b;
+  if(y<WL){r=.42;g=.4;b=.33}else if(y<WL+2.2){r=.76;g=.7;b=.5}
+  else if(y>150&&sl<.3){r=.93;g=.95;b=.98}
+  else if(sl>.22||y>115){const q=.42+vn(x*.08,z*.08)*.15;r=q;g=q*.97;b=q*.93}
+  else{const q=vn(x*.04,z*.04)*.25,dk=1-Math.min(.35,y/300);r=(.2+q*.4)*dk;g=(.42+q*.5)*dk;b=(.15+q*.2)*dk}
+  col[k]=r;col[k+1]=g;col[k+2]=b;
+ }
+ const ind=gridIdx(s).slice(),D=step*.6+1,sides=[[0,1],[s*w,1],[0,w],[s,w]];let nb=w*w;
+ for(const [st,sd] of sides){
+  for(let q=0;q<w;q++){const v=st+q*sd,a=(nb+q)*3,b=v*3;pos[a]=pos[b];pos[a+1]=pos[b+1]-D;pos[a+2]=pos[b+2];
+   nor.copyWithin(a,b,b+3);col.copyWithin(a,b,b+3)}
+  for(let q=0;q<s;q++){const v0=st+q*sd,v1=v0+sd,d0=nb+q,d1=d0+1;ind.push(v0,v1,d0,v1,d1,d0,v0,d0,v1,v1,d0,d1)}
+  nb+=w;
+ }
+ const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.BufferAttribute(pos,3));g.setAttribute('normal',new THREE.BufferAttribute(nor,3));g.setAttribute('color',new THREE.BufferAttribute(col,3));
+ g.setIndex(ind);g.computeBoundingSphere();const m=new THREE.Mesh(g,terrainMat);scene.add(m);return m;
+}
+const live=new Map(),lodFor=d=>d<220?0:d<700?1:2;
+function updateChunks(maxBuild){
+ const R=1545,ccx=Math.floor(hero.x/CH),ccz=Math.floor(hero.z/CH),r=Math.ceil(R/CH)+1,want=new Map();
+ for(let cz=ccz-r;cz<=ccz+r;cz++)for(let cx=ccx-r;cx<=ccx+r;cx++){
+  if(cx<0||cz<0||cx>=NC||cz>=NC)continue;
+  const d=Math.hypot((cx+.5)*CH-hero.x,(cz+.5)*CH-hero.z);if(d>R)continue;want.set(cz*NC+cx,{cx,cz,d,lod:lodFor(d)})}
+ for(const [k,o] of live){const w=want.get(k);if(!w||w.lod!==o.lod){scene.remove(o.mesh);o.mesh.geometry.dispose();live.delete(k)}}
+ const todo=[...want].filter(([k])=>!live.has(k)).sort((a,b)=>a[1].d-b[1].d);
+ for(let i=0;i<Math.min(maxBuild,todo.length);i++){const [k,w]=todo[i];live.set(k,{lod:w.lod,mesh:buildChunk(w.cx,w.cz,w.lod)})}
+}
+
+// ---------- Дерева (інстанси біля героя) ----------
+const TMAX=2200,crown=new THREE.InstancedMesh(new THREE.ConeGeometry(1.7,5,7),new THREE.MeshLambertMaterial({color:0x1f5a2a}),TMAX),
+ trunk=new THREE.InstancedMesh(new THREE.CylinderGeometry(.22,.3,2,6),new THREE.MeshLambertMaterial({color:0x5a3d22}),TMAX),dm=new THREE.Object3D();
+crown.frustumCulled=trunk.frustumCulled=false;scene.add(crown,trunk);let tfx=-1e9,tfz=-1e9;
+function refillTrees(){let n=0;tfx=hero.x;tfz=hero.z;
+ for(let gz=Math.floor((hero.z-260)/8);gz<=Math.floor((hero.z+260)/8);gz++)for(let gx=Math.floor((hero.x-260)/8);gx<=Math.floor((hero.x+260)/8);gx++){
+  const t=treeAt(gx,gz);if(!t||n>=TMAX)continue;
+  dm.rotation.set(0,0,0);dm.scale.setScalar(t.s);dm.position.set(t.x,t.h+t.s,t.z);dm.updateMatrix();trunk.setMatrixAt(n,dm.matrix);
+  dm.position.set(t.x,t.h+t.s*4.2,t.z);dm.updateMatrix();crown.setMatrixAt(n,dm.matrix);n++}
+ crown.count=trunk.count=n;crown.instanceMatrix.needsUpdate=trunk.instanceMatrix.needsUpdate=true}
+
+// ---------- Герой ----------
+const SP={walk:6/3.6,sneak:3/3.6,prone:1/3.6,run:12/3.6},EYE={walk:1.7,sneak:1.2,prone:.4,run:1.7},STEP={walk:.75,sneak:.55,prone:.4,run:1.2},BOB={walk:.03,sneak:.02,prone:.01,run:.06},NAME={walk:'ходьба',sneak:'скрадання',prone:'лежачи',run:'біг'};
+const hero={x:houses[0].x-12,z:houses[0].z+10,y:0,yaw:0,pitch:0,vx:0,vz:0,vy:0,ground:true,stance:'walk',phase:0,eye:1.7,step:0,foot:'',hp:100};
+hero.y=hAt(hero.x,hero.z);hero.yaw=Math.atan2(-(houses[0].x-hero.x),-(houses[0].z-hero.z));
+const keys={},joy={x:0,y:0},look={dx:0,dy:0},tog={sneak:false,prone:false};let run=false,jumpQ=false;
+function blocked(x,z,r){
+ if(x<3||z<3||x>N-3||z>N-3)return true;
+ const gx=Math.floor(x/8),gz=Math.floor(z/8);
+ for(let j=-1;j<=1;j++)for(let i=-1;i<=1;i++){const t=treeAt(gx+i,gz+j);if(t&&Math.hypot(x-t.x,z-t.z)<r+.35)return true}
+ for(const w of walls){if(hero.y>w.top-.3)continue;const dx=Math.max(w.x0-x,0,x-w.x1),dz=Math.max(w.z0-z,0,z-w.z1);if(dx*dx+dz*dz<r*r)return true}
+ return false}
+const SWY=WL-1.2,gEff=(x,z)=>Math.max(hAt(x,z),SWY);
+function tryMove(nx,nz){const r=hero.stance==='prone'?.5:.564;if(blocked(nx,nz,r))return false;const g=gEff(nx,nz);
+ if(hero.ground){if(g-hero.y>.45)return false;if(g>hero.y+.02&&hAt(nx,nz)>=WL&&slopeAt(nx,nz)>1)return false}
+ hero.x=nx;hero.z=nz;return true}
+let surfName='трава',slopeDeg=0;
+function update(dt){
+ const k=keys;hero.yaw-=look.dx*.0042+((k.ArrowRight?1:0)-(k.ArrowLeft?1:0))*1.8*dt;hero.pitch=clamp(hero.pitch-look.dy*.0042,-1.5,1.5);look.dx=look.dy=0;
+ const len=Math.hypot((k.KeyW||k.ArrowUp?1:0)-(k.KeyS||k.ArrowDown?1:0)+joy.y,(k.KeyD?1:0)-(k.KeyA?1:0)+joy.x);
+ const swim=hAt(hero.x,hero.z)<WL-1.2&&hero.ground;
+ const want=swim?'walk':tog.prone?'prone':tog.sneak?'sneak':((run||k.ShiftLeft)&&len>.1?'run':'walk');hero.stance=want;
+ const yw=hero.yaw,fx=-Math.sin(yw),fz=-Math.cos(yw),rx=Math.cos(yw),rz=-Math.sin(yw);
+ let fi=(k.KeyW||k.ArrowUp?1:0)-(k.KeyS||k.ArrowDown?1:0)+joy.y,si=(k.KeyD?1:0)-(k.KeyA?1:0)+joy.x;const m=Math.hypot(fi,si);if(m>1){fi/=m;si/=m}
+ let dx=fx*fi+rx*si,dz=fz*fi+rz*si;const dl=Math.hypot(dx,dz);
+ const h0=hAt(hero.x,hero.z),sl=slopeAt(hero.x,hero.z);slopeDeg=Math.atan(sl)*57.3;
+ let mod=1;if(swim){mod=.45;surfName='плавання'}else if(h0<WL){mod=.5;surfName='вода (брід)'}else if(h0<WL+2.2){mod=.7;surfName='пісок'}else if(sl>.5||h0>115){mod=.8;surfName='скеля'}else surfName='трава';
+ let tx=0,tz=0;
+ if(dl>.01){const ux=dx/dl,uz=dz/dl,rise=(hAt(hero.x+ux*.6,hero.z+uz*.6)-h0)/.6;mod*=clamp(1-.6*rise,.4,1.2);const sp=SP[want]*mod*Math.min(1,dl);tx=ux*sp;tz=uz*sp}
+ const ac=(hero.ground?14:1.5)*dt;hero.vx+=clamp(tx-hero.vx,-ac,ac);hero.vz+=clamp(tz-hero.vz,-ac,ac);
+ const ox=hero.x,oz=hero.z;
+ if(!tryMove(hero.x+hero.vx*dt,hero.z+hero.vz*dt)){if(!tryMove(hero.x+hero.vx*dt,hero.z))hero.vx=0;if(!tryMove(hero.x,hero.z+hero.vz*dt))hero.vz=0}
+ const moved=Math.hypot(hero.x-ox,hero.z-oz),g=gEff(hero.x,hero.z);
+ if(hero.ground){if(hero.y-g>.45)hero.ground=false;else hero.y+=(g-hero.y)*Math.min(1,dt*20);
+  if((jumpQ||k.Space)&&!swim&&(want==='walk'||want==='run')){hero.vy=Math.sqrt(2*9.81*.9);hero.ground=false}}
+ jumpQ=false;
+ if(!hero.ground){hero.vy-=9.81*dt;hero.y+=hero.vy*dt;if(hero.y<=g&&hero.vy<=0){if(hero.vy<-8)hero.hp-=(-hero.vy-8)*10;hero.y=g;hero.vy=0;hero.ground=true}}
+ // хода: фаза за пройденою відстанню
+ if(hero.ground&&moved>1e-4){hero.phase+=moved/(2*STEP[want]);const st=Math.floor(hero.phase*2);if(st!==hero.step){hero.step=st;hero.foot=st%2?'ліва нога':'права нога'}}
+ const spd=Math.hypot(hero.vx,hero.vz),kk=hero.ground?Math.min(1,spd/1.2):0;
+ hero.eye+=(EYE[want]-hero.eye)*Math.min(1,dt*10);
+ const bobY=Math.sin(hero.phase*4*Math.PI)*BOB[want]*kk,bobX=Math.sin(hero.phase*2*Math.PI)*BOB[want]*.5*kk;
+ camera.position.set(hero.x+Math.cos(yw)*bobX,hero.y+hero.eye+bobY,hero.z-Math.sin(yw)*bobX);
+ camera.rotation.set(hero.pitch+bobY*.3,yw,Math.sin(hero.phase*2*Math.PI)*.012*kk);
+}
+
+// ---------- День / ніч ----------
+let hours=10;const DAY=new THREE.Color(.56,.76,.96),DUSK=new THREE.Color(.95,.55,.33),NIGHT=new THREE.Color(.02,.03,.07);
+function lighting(){
+ const a=(hours/24-.25)*2*Math.PI,el=Math.sin(a),k=sm(-.12,.22,el),c=NIGHT.clone().lerp(DAY,k).lerp(DUSK,Math.max(0,1-Math.abs(el-.02)/.28)*.7);
+ scene.background.copy(c);scene.fog.color.copy(c);hemi.color.copy(c);hemi.intensity=.14+.55*k;
+ sun.position.set(hero.x+Math.cos(a)*600,hero.y+Math.sin(a)*600,hero.z+250);sun.target.position.set(hero.x,hero.y,hero.z);sun.intensity=Math.max(0,el)*1.05;
+ moon.position.set(hero.x-Math.cos(a)*600,hero.y-Math.sin(a)*600,hero.z-250);moon.target.position.copy(sun.target.position);moon.intensity=Math.max(0,-el)*.4;
+ const night=1-k;torch.position.copy(camera.position);torch.intensity=night*1.6;lamps.forEach(l=>l.intensity=night*1.4);
+ stars.material.opacity=clamp(night*1.3-.2,0,1);stars.position.copy(camera.position);
+ water.position.x=Math.round(hero.x/16)*16;water.position.z=Math.round(hero.z/16)*16;
+ return el}
+
+// ---------- Мінікарта (розрахунок карти) ----------
+const mmBase=document.createElement('canvas');mmBase.width=mmBase.height=110;
+(function(){const g=mmBase.getContext('2d'),im=g.createImageData(110,110),sc=N/110;
+ for(let j=0;j<110;j++)for(let i=0;i<110;i++){const h=hAt((i+.5)*sc,(j+.5)*sc),o=(j*110+i)*4;let r,gg,b;
+  if(h<WL){r=40;gg=100;b=160}else if(h<WL+2.2){r=190;gg=175;b=125}else if(h>115){const q=90+h*.6;r=q;gg=q;b=q}else{r=50+h*.5;gg=110+h*.6;b=50}
+  im.data.set([r,gg,b,255],o)}g.putImageData(im,0,0)})();
+const mctx=$('mm').getContext('2d');
+function mini(){mctx.drawImage(mmBase,0,0);const s=110/N,px=hero.x*s,pz=hero.z*s,ph=Math.atan2(-Math.cos(hero.yaw),-Math.sin(hero.yaw));
+ mctx.strokeStyle='rgba(255,255,255,.7)';mctx.beginPath();mctx.arc(px,pz,1500*s,0,7);mctx.stroke();
+ mctx.fillStyle='rgba(255,230,80,.6)';mctx.beginPath();mctx.moveTo(px,pz);mctx.arc(px,pz,16,ph-.6,ph+.6);mctx.fill();
+ mctx.fillStyle='#f33';mctx.beginPath();mctx.arc(px,pz,2.5,0,7);mctx.fill();
+ mctx.fillStyle='#fff';houses.forEach(b=>mctx.fillRect(b.x*s-1,b.z*s-1,2,2))}
+
+// ---------- Введення ----------
+addEventListener('keydown',e=>{keys[e.code]=1;if(e.code==='KeyC'){tog.sneak=!tog.sneak;tog.prone=false}if(e.code==='KeyZ'){tog.prone=!tog.prone;tog.sneak=false}if(e.code==='Space')e.preventDefault()});
+addEventListener('keyup',e=>keys[e.code]=0);
+const lk=new Map();
+cv.addEventListener('pointerdown',e=>{lk.set(e.pointerId,[e.clientX,e.clientY]);cv.setPointerCapture(e.pointerId)});
+cv.addEventListener('pointermove',e=>{const p=lk.get(e.pointerId);if(!p)return;look.dx+=e.clientX-p[0];look.dy+=e.clientY-p[1];p[0]=e.clientX;p[1]=e.clientY});
+['pointerup','pointercancel'].forEach(t=>cv.addEventListener(t,e=>lk.delete(e.pointerId)));
+const jz=$('joy'),jk=$('knob');let jid=null;
+function jm(e){const r=jz.getBoundingClientRect();let dx=(e.clientX-r.left-r.width/2)/50,dy=(e.clientY-r.top-r.height/2)/50;const l=Math.hypot(dx,dy);if(l>1){dx/=l;dy/=l}joy.x=dx;joy.y=-dy;jk.style.transform=`translate(${dx*40}px,${dy*40}px)`}
+jz.addEventListener('pointerdown',e=>{jid=e.pointerId;jz.setPointerCapture(jid);jm(e)});
+jz.addEventListener('pointermove',e=>{if(e.pointerId===jid)jm(e)});
+['pointerup','pointercancel'].forEach(t=>jz.addEventListener(t,e=>{if(e.pointerId===jid){jid=null;joy.x=joy.y=0;jk.style.transform=''}}));
+function act(b,d){if(b==='run')run=!!d;if(b==='jump'&&d)jumpQ=true;if(d&&b==='sneak'){tog.sneak=!tog.sneak;tog.prone=false}if(d&&b==='prone'){tog.prone=!tog.prone;tog.sneak=false}}
+document.querySelectorAll('#bt button').forEach(b=>{const k=b.dataset.b;b.addEventListener('pointerdown',e=>{e.preventDefault();act(k,1)});['pointerup','pointerleave','pointercancel'].forEach(t=>b.addEventListener(t,()=>act(k,0)))});
+$('tm').oninput=e=>hours=+e.target.value;
+addEventListener('contextmenu',e=>e.preventDefault());
+
+// ---------- Цикл ----------
+let last=0,acc=0,fps=60,cnum=0;
+function frame(ts){
+ const dt=Math.min(.05,(ts-last)/1000||.016);last=ts;fps+=(1/dt-fps)*.05;
+ if($('au').checked){hours=(hours+dt*24/180)%24;$('tm').value=hours}
+ update(dt);
+ if(Math.hypot(hero.x-tfx,hero.z-tfz)>24)refillTrees();
+ cnum+=dt;if(cnum>.25){cnum=0;updateChunks(8)}
+ const el=lighting();renderer.render(scene,camera);mini();
+ acc+=dt;if(acc>.2){acc=0;
+  const hh=Math.floor(hours),mm=Math.floor((hours-hh)*60);
+  $('hud').textContent=`${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')} ${el>.05?'☀':'🌙'}  HP ${Math.max(0,hero.hp|0)}\n${NAME[hero.stance]} · ${(Math.hypot(hero.vx,hero.vz)*3.6).toFixed(1)} км/г${hero.ground?'':' · у повітрі'}\n${surfName} · схил ${slopeDeg.toFixed(0)}° · ${hero.foot}\nX ${hero.x|0} Z ${hero.z|0} · H ${hero.y.toFixed(1)} м\nчанків ${live.size} · △ ${(renderer.info.render.triangles/1000).toFixed(0)}k · ${fps.toFixed(0)} fps`;
+  document.querySelector('[data-b=run]').classList.toggle('on',hero.stance==='run');
+  document.querySelector('[data-b=sneak]').classList.toggle('on',tog.sneak);
+  document.querySelector('[data-b=prone]').classList.toggle('on',tog.prone)}
+ requestAnimationFrame(frame)}
+setTimeout(()=>{update(.016);updateChunks(99999);refillTrees();$('load').remove();requestAnimationFrame(frame)},30);
+</script>
+</body>
+</html>
