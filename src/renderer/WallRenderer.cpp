@@ -163,14 +163,11 @@ void WallRenderer::DrawWall(Framebuffer& framebuffer, const Camera& camera,
     const float len = std::sqrt(dx*dx + dz*dz);
     if (len < 1e-6f) return;
 
-    // Outward-facing horizontal normal.  For a CCW wall start→end the outward
-    // normal is (-dz, 0, dx) / len.  Flip it so it points toward the camera.
-    float nx = -dz / len, nz = dx / len;
-    const Vector3 mid = { (start.x+end.x)*0.5f, (bottomHeight+topHeight)*0.5f,
-                           (start.z+end.z)*0.5f };
-    if (nx*(camera.position.x - mid.x) + nz*(camera.position.z - mid.z) < 0.f) {
-        nx = -nx; nz = -nz;
-    }
+    // Fixed outward normal from the wall's winding order (start→end, CCW).
+    // Do NOT flip toward the camera — a volumetric wall is a fixed 3D box.
+    // The front face faces one side, the back face faces the other, and
+    // backface culling naturally shows whichever face the camera is on.
+    const float nx = -dz / len, nz = dx / len;
 
     // Build the 8 corners of the box.
     const float half = kWallThickness * 0.5f;
