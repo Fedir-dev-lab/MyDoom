@@ -49,73 +49,6 @@ std::vector<V> ClipNear(const std::vector<V>& in, Lerp lerp) {
 }
 
 // ---------------------------------------------------------------------------
-// Project one camera-space vertex to screen.
-// ---------------------------------------------------------------------------
-ScrVert Project(const CamVert& v, const Camera& cam) {
-    const float invZ = 1.f / v.z;
-    return { cam.halfWidth  + v.x * invZ * cam.focalLength,
-             cam.halfHeight - v.y * invZ * cam.focalLength,
-             invZ };
-}
-
-// ---------------------------------------------------------------------------
-// Flat-shaded scanline fill (perspective-correct depth only).
-// ---------------------------------------------------------------------------
-void FillFlat(Framebuffer& fb, const std::vector<ScrVert>& poly,
-              uint32_t color, int sw, int sh) {
-    const int n = static_cast<int>(poly.size());
-    if (n < 3) return;
-
-    float minY = poly[0].sy, maxY = poly[0].sy;
-    for (int i = 1; i < n; ++i) {
-        if (poly[i].sy < minY) minY = poly[i].sy;
-        if (poly[i].sy > maxY) maxY = poly[i].sy;
-    }
-    const int y0 = std::max(0,    static_cast<int>(std::ceil(minY)));
-    const int y1 = std::min(sh-1, static_cast<int>(std::floor(maxY)));
-
-    struct Cross { float x, invZ; };
-
-    for (int y = y0; y <= y1; ++y) {
-        const float yc = static_cast<float>(y) + 0.5f;
-        std::array<Cross, 8> cr;
-        int nc = 0;
-
-        for (int i = 0; i < n; ++i) {
-            const ScrVert& a = poly[i];
-            const ScrVert& b = poly[(i+1)%n];
-            float ax,ay,ai, bx,by,bi;
-            if (a.sy <= b.sy) { ax=a.sx; ay=a.sy; ai=a.invZ; bx=b.sx; by=b.sy; bi=b.invZ; }
-            else              { ax=b.sx; ay=b.sy; ai=b.invZ; bx=a.sx; by=a.sy; bi=a.invZ; }
-            const float dy = by - ay;
-            if (dy < 1e-6f) continue;
-            if (yc >= ay && yc < by) {
-                const float t = (yc - ay) / dy;
-                if (nc < 8) cr[nc++] = { ax + t*(bx-ax), ai + t*(bi-ai) };
-            }
-        }
-        if (nc < 2) continue;
-
-        for (int i = 1; i < nc; ++i) {
-            const Cross key = cr[i]; int j = i-1;
-            while (j >= 0 && cr[j].x > key.x) { cr[j+1]=cr[j]; --j; }
-            cr[j+1] = key;
-        }
-        for (int p = 0; p+1 < nc; p += 2) {
-            const int xli = std::max(0,    static_cast<int>(std::ceil(cr[p].x)));
-            const int xri = std::min(sw-1, static_cast<int>(std::floor(cr[p+1].x)));
-            if (xli > xri) continue;
-            const float span = cr[p+1].x - cr[p].x;
-            const float dI   = (span > 1e-6f) ? (cr[p+1].invZ - cr[p].invZ) / span : 0.f;
-            float invZ = cr[p].invZ + dI*(static_cast<float>(xli)+0.5f - cr[p].x);
-            const size_t row = static_cast<size_t>(y) * sw;
-            for (int x = xli; x <= xri; ++x, invZ += dI)
-                if (invZ > 0.f) fb.SetPixelDepthFast(row+x, color, 1.f/invZ);
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Textured scanline fill (perspective-correct UV + Gouraud lighting).
 // ---------------------------------------------------------------------------
 void FillTextured(Framebuffer& fb, const std::vector<ScrVert>& poly,
@@ -194,40 +127,10 @@ void FillTextured(Framebuffer& fb, const std::vector<ScrVert>& poly,
 }
 
 // ---------------------------------------------------------------------------
-// Helpers: 3D cross product and camera-space transform.
+// Helpers: 3D cross product.
 // ---------------------------------------------------------------------------
-inline Vector3 Cross3(Vector3 a, Vector3 b) {
+inline Vector3 Cross3(const Vector3& a, const Vector3& b) {
     return { a.y*b.z - a.z*b.y, a.z*b.x - a.x*b.z, a.x*b.y - a.y*b.x };
-}
-
-std::vector<CamVert> ToCam(const std::vector<Vector3>& wv, const Camera& cam) {
-    std::vector<CamVert> cv(wv.size());
-    for (size_t i = 0; i < wv.size(); ++i) {
-        auto v = cam.ToView(wv[i]);
-        cv[i] = { v.x, v.y, v.z };
-    }
-    return cv;
-}
-
-// ---------------------------------------------------------------------------
-// Compute flat lighting for a face from its outward normal.
-// ---------------------------------------------------------------------------
-float FlatLit(const Vector3& normal, const Vector3& centroid,
-              const std::vector<PointLight>& lights, float ambient,
-              const DirectionalLight& sun) {
-    const Vector3 n = normal.Normalized();
-    const Vector3 toSun = Vector3(-sun.dirX, -sun.dirY, -sun.dirZ).Normalized();
-    const float lambert = std::max(0.f, Vector3::Dot(n, toSun));
-    float lit = ambient + sun.intensity * lambert * 0.6f;
-    for (const PointLight& pl : lights) {
-        const Vector3 toL = pl.position - centroid;
-        const float d2 = toL.LengthSquared();
-        if (d2 >= pl.radiusSq || d2 < 1e-6f) continue;
-        const float diff = std::max(0.f, Vector3::Dot(n, toL.Normalized()));
-        const float t2 = d2 / pl.radiusSq;
-        lit += (1.f-t2)*(1.f-t2)*pl.intensity*diff;
-    }
-    return lit < 1.f ? lit : 1.f;
 }
 
 } // namespace
@@ -284,101 +187,92 @@ void WallRenderer::DrawWall(Framebuffer& framebuffer, const Camera& camera,
     const Vector3 B3 = { start.x - ox, topHeight,    start.z - oz };
 
     // -----------------------------------------------------------------------
-    // Draw textured front face with per-corner Gouraud lighting.
-    // wv = { F0, F1, F2, F3 }, UVs = bottom-left→bottom-right→top-right→top-left.
+    // Lambda: draw a textured polygon face with per-corner UV + Gouraud lighting.
+    // wv = world corners (CCW from outside), uvs = {u0,v0, u1,v1, ...}.
     // -----------------------------------------------------------------------
-    {
-        const std::vector<Vector3> wv = { F0, F1, F2, F3 };
-        const Vector3 normal = Cross3(wv[1]-wv[0], wv[2]-wv[0]);
-        if (normal.LengthSquared() >= 1e-10f &&
-            Vector3::Dot(normal, camera.position - wv[0]) > 0.f) {
+    struct TexVert { float x, y, z, u, v, lit; };
 
-            // Per-corner UV and lighting.
-            const float us[4] = { 0.f, 1.f, 1.f, 0.f };
-            const float vs[4] = { 1.f, 1.f, 0.f, 0.f };
-            float lits[4];
-            for (int i = 0; i < 4; ++i)
-                lits[i] = ComputeLighting(wv[i].x, wv[i].y, wv[i].z,
-                                          lights, ambientLight, sunLight);
-
-            // Extended vertex type for textured clipping.
-            struct TexVert { float x, y, z, u, v, lit; };
-            std::vector<TexVert> tv(4);
-            for (int i = 0; i < 4; ++i) {
-                auto cv = camera.ToView(wv[i]);
-                tv[i] = { cv.x, cv.y, cv.z, us[i], vs[i], lits[i] };
-            }
-
-            auto lerpTex = [](const TexVert& a, const TexVert& b, float t) -> TexVert {
-                return { a.x+t*(b.x-a.x), a.y+t*(b.y-a.y), kNearPlane,
-                         a.u+t*(b.u-a.u), a.v+t*(b.v-a.v), a.lit+t*(b.lit-a.lit) };
-            };
-            auto clipped = ClipNear(tv, lerpTex);
-            if (clipped.size() >= 3) {
-                std::vector<ScrVert> poly(clipped.size());
-                for (size_t i = 0; i < clipped.size(); ++i) {
-                    const float invZ = 1.f / clipped[i].z;
-                    poly[i] = {
-                        camera.halfWidth  + clipped[i].x * invZ * camera.focalLength,
-                        camera.halfHeight - clipped[i].y * invZ * camera.focalLength,
-                        invZ,
-                        clipped[i].u   * invZ,
-                        clipped[i].v   * invZ,
-                        clipped[i].lit * invZ
-                    };
-                }
-                FillTextured(framebuffer, poly, texture, sw, sh);
-            }
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // Lambda: draw a flat-shaded polygon face (backface-culled, lit by normal).
-    // -----------------------------------------------------------------------
-    auto drawFlat = [&](const std::vector<Vector3>& wv, uint32_t baseColor) {
+    auto drawTexFace = [&](const std::vector<Vector3>& wv, const float* uvs) {
         if (wv.size() < 3) return;
 
-        // Compute outward normal from first two edges (CCW winding assumed).
-        const Vector3 normal = Cross3(wv[1] - wv[0], wv[2] - wv[0]);
+        // Outward normal via cross product of first two edges.
+        const Vector3 normal = Cross3(wv[1]-wv[0], wv[2]-wv[0]);
         if (normal.LengthSquared() < 1e-10f) return;
-
-        // Backface cull: skip if camera is on the inward (wrong) side.
+        // Backface cull.
         if (Vector3::Dot(normal, camera.position - wv[0]) <= 0.f) return;
 
-        // Flat lighting from the face normal (Lambert sun + point lights).
-        const Vector3 centroid = (wv[0] + wv[1] + wv[2]) / 3.f;
-        const float lit = FlatLit(normal, centroid, lights, ambientLight, sunLight);
-        const uint32_t color = ApplyLight(baseColor, lit);
+        // Per-corner Gouraud lighting.
+        std::vector<TexVert> tv(wv.size());
+        for (size_t i = 0; i < wv.size(); ++i) {
+            auto cv = camera.ToView(wv[i]);
+            const float lit = ComputeLighting(wv[i].x, wv[i].y, wv[i].z,
+                                              lights, ambientLight, sunLight);
+            tv[i] = { cv.x, cv.y, cv.z, uvs[i*2], uvs[i*2+1], lit };
+        }
 
-        // Transform to camera space, clip, project, fill.
-        auto cv = ToCam(wv, camera);
-        auto lerpCam = [](const CamVert& a, const CamVert& b, float t) -> CamVert {
-            return { a.x + t*(b.x-a.x), a.y + t*(b.y-a.y), kNearPlane };
+        auto lerpTex = [](const TexVert& a, const TexVert& b, float t) -> TexVert {
+            return { a.x+t*(b.x-a.x), a.y+t*(b.y-a.y), kNearPlane,
+                     a.u+t*(b.u-a.u), a.v+t*(b.v-a.v), a.lit+t*(b.lit-a.lit) };
         };
-        auto clipped = ClipNear(cv, lerpCam);
+        auto clipped = ClipNear(tv, lerpTex);
         if (clipped.size() < 3) return;
 
         std::vector<ScrVert> poly(clipped.size());
-        for (size_t i = 0; i < clipped.size(); ++i)
-            poly[i] = Project(clipped[i], camera);
-
-        FillFlat(framebuffer, poly, color, sw, sh);
+        for (size_t i = 0; i < clipped.size(); ++i) {
+            const float invZ = 1.f / clipped[i].z;
+            poly[i] = {
+                camera.halfWidth  + clipped[i].x * invZ * camera.focalLength,
+                camera.halfHeight - clipped[i].y * invZ * camera.focalLength,
+                invZ,
+                clipped[i].u   * invZ,
+                clipped[i].v   * invZ,
+                clipped[i].lit * invZ
+            };
+        }
+        FillTextured(framebuffer, poly, texture, sw, sh);
     };
 
-    // Base color palette for untextured faces (depth-cued shading).
-    const uint32_t kBack = Framebuffer::MakeColor(140, 118, 88);
-    const uint32_t kTop  = Framebuffer::MakeColor(100,  84, 62);
-    const uint32_t kCap  = Framebuffer::MakeColor(120, 100, 74);
+    // -----------------------------------------------------------------------
+    // Draw all 5 textured faces.
+    // -----------------------------------------------------------------------
 
-    // Back face — CCW from outside (inward-facing): B0, B3, B2, B1
-    drawFlat({ B0, B3, B2, B1 }, kBack);
+    // Front face (main visible surface): F0→F1→F2→F3
+    // UV: u along wall length (0→1), v bottom(1)→top(0)
+    {
+        const std::vector<Vector3> wv = { F0, F1, F2, F3 };
+        const float uvs[8] = { 0.f,1.f,  1.f,1.f,  1.f,0.f,  0.f,0.f };
+        drawTexFace(wv, uvs);
+    }
 
-    // Top cap — CCW from above: F3, F2, B2, B3
-    drawFlat({ F3, F2, B2, B3 }, kTop);
+    // Back face (inward-facing): B0→B3→B2→B1
+    // Mirror UV horizontally so texture reads same direction
+    {
+        const std::vector<Vector3> wv = { B0, B3, B2, B1 };
+        const float uvs[8] = { 1.f,1.f,  1.f,0.f,  0.f,0.f,  0.f,1.f };
+        drawTexFace(wv, uvs);
+    }
 
-    // Left cap (start side) — CCW from left side: F0, B0, B3, F3
-    drawFlat({ F0, B0, B3, F3 }, kCap);
+    // Top cap: F3→F2→B2→B3
+    // Map texture across the thickness (narrow strip)
+    {
+        const std::vector<Vector3> wv = { F3, F2, B2, B3 };
+        const float uvs[8] = { 0.f,0.f,  1.f,0.f,  1.f,1.f,  0.f,1.f };
+        drawTexFace(wv, uvs);
+    }
 
-    // Right cap (end side) — CCW from right side: B1, F1, F2, B2
-    drawFlat({ B1, F1, F2, B2 }, kCap);
+    // Left cap (start side): F0→B0→B3→F3
+    // Map texture vertically (thickness is horizontal)
+    {
+        const std::vector<Vector3> wv = { F0, B0, B3, F3 };
+        const float uvs[8] = { 0.f,1.f,  1.f,1.f,  1.f,0.f,  0.f,0.f };
+        drawTexFace(wv, uvs);
+    }
+
+    // Right cap (end side): B1→F1→F2→B2
+    // Map texture vertically
+    {
+        const std::vector<Vector3> wv = { B1, F1, F2, B2 };
+        const float uvs[8] = { 0.f,1.f,  1.f,1.f,  1.f,0.f,  0.f,0.f };
+        drawTexFace(wv, uvs);
+    }
 }
