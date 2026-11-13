@@ -11,60 +11,117 @@
 
 namespace {
 
-constexpr float kNearPlane = 0.05f;
+constexpr float kNearPlane     = 0.05f;
+constexpr float kWallThickness = 0.18f;  // world-unit depth of solid wall
 
-// Camera-space vertex with texture and lighting attributes.
-struct WallVert {
-    float vx, vy, vz;   // camera space
-    float u, v, lit;
+// ---------------------------------------------------------------------------
+// Camera-space vertex (plain position only)
+// ---------------------------------------------------------------------------
+struct CamVert { float x, y, z; };
+
+// Screen vertex: screen-space XY + depth + optional perspective-correct UVs/lit.
+struct ScrVert {
+    float sx, sy, invZ;
+    float uOverZ = 0.f, vOverZ = 0.f, litOverZ = 1.f;
 };
 
-// Projected vertex: screen X/Y + attributes divided by depth for
-// perspective-correct linear interpolation across the polygon.
-struct ProjVert {
-    float sx, sy;
-    float invZ, uOverZ, vOverZ, litOverZ;
-};
-
-// Sutherland–Hodgman clip against the near plane (vz >= near).
-std::vector<WallVert> ClipNear(const std::array<WallVert, 4>& in) {
-    std::vector<WallVert> out;
-    out.reserve(6);
-    for (int i = 0; i < 4; ++i) {
-        const WallVert& a = in[i];
-        const WallVert& b = in[(i + 1) % 4];
-        const bool aIn = a.vz >= kNearPlane;
-        const bool bIn = b.vz >= kNearPlane;
-        if (aIn) { out.push_back(a); }
+// ---------------------------------------------------------------------------
+// Near-plane Sutherland–Hodgman clip, generic over vertex type.
+// Lerp is a callable (const V&, const V&, float t) -> V.
+// ---------------------------------------------------------------------------
+template<typename V, typename Lerp>
+std::vector<V> ClipNear(const std::vector<V>& in, Lerp lerp) {
+    std::vector<V> out;
+    out.reserve(in.size() + 1);
+    const int n = static_cast<int>(in.size());
+    for (int i = 0; i < n; ++i) {
+        const V& a = in[i];
+        const V& b = in[(i + 1) % n];
+        const bool aIn = a.z >= kNearPlane;
+        const bool bIn = b.z >= kNearPlane;
+        if (aIn) out.push_back(a);
         if (aIn != bIn) {
-            const float t = (kNearPlane - a.vz) / (b.vz - a.vz);
-            out.push_back({
-                a.vx + t*(b.vx-a.vx), a.vy + t*(b.vy-a.vy), kNearPlane,
-                a.u  + t*(b.u -a.u),  a.v  + t*(b.v -a.v),
-                a.lit + t*(b.lit-a.lit)
-            });
+            const float t = (kNearPlane - a.z) / (b.z - a.z);
+            out.push_back(lerp(a, b, t));
         }
     }
     return out;
 }
 
-ProjVert Project(const WallVert& w, const Camera& cam) {
-    const float invZ = 1.0f / w.vz;
-    return {
-        cam.halfWidth  + w.vx * invZ * cam.focalLength,
-        cam.halfHeight - w.vy * invZ * cam.focalLength,
-        invZ,
-        w.u   * invZ,
-        w.v   * invZ,
-        w.lit * invZ
-    };
+// ---------------------------------------------------------------------------
+// Project one camera-space vertex to screen.
+// ---------------------------------------------------------------------------
+ScrVert Project(const CamVert& v, const Camera& cam) {
+    const float invZ = 1.f / v.z;
+    return { cam.halfWidth  + v.x * invZ * cam.focalLength,
+             cam.halfHeight - v.y * invZ * cam.focalLength,
+             invZ };
 }
 
-// Scanline fill of a convex polygon with perspective-correct UV + lighting.
-void FillTextured(Framebuffer& fb, const std::vector<ProjVert>& poly,
+// ---------------------------------------------------------------------------
+// Flat-shaded scanline fill (perspective-correct depth only).
+// ---------------------------------------------------------------------------
+void FillFlat(Framebuffer& fb, const std::vector<ScrVert>& poly,
+              uint32_t color, int sw, int sh) {
+    const int n = static_cast<int>(poly.size());
+    if (n < 3) return;
+
+    float minY = poly[0].sy, maxY = poly[0].sy;
+    for (int i = 1; i < n; ++i) {
+        if (poly[i].sy < minY) minY = poly[i].sy;
+        if (poly[i].sy > maxY) maxY = poly[i].sy;
+    }
+    const int y0 = std::max(0,    static_cast<int>(std::ceil(minY)));
+    const int y1 = std::min(sh-1, static_cast<int>(std::floor(maxY)));
+
+    struct Cross { float x, invZ; };
+
+    for (int y = y0; y <= y1; ++y) {
+        const float yc = static_cast<float>(y) + 0.5f;
+        std::array<Cross, 8> cr;
+        int nc = 0;
+
+        for (int i = 0; i < n; ++i) {
+            const ScrVert& a = poly[i];
+            const ScrVert& b = poly[(i+1)%n];
+            float ax,ay,ai, bx,by,bi;
+            if (a.sy <= b.sy) { ax=a.sx; ay=a.sy; ai=a.invZ; bx=b.sx; by=b.sy; bi=b.invZ; }
+            else              { ax=b.sx; ay=b.sy; ai=b.invZ; bx=a.sx; by=a.sy; bi=a.invZ; }
+            const float dy = by - ay;
+            if (dy < 1e-6f) continue;
+            if (yc >= ay && yc < by) {
+                const float t = (yc - ay) / dy;
+                if (nc < 8) cr[nc++] = { ax + t*(bx-ax), ai + t*(bi-ai) };
+            }
+        }
+        if (nc < 2) continue;
+
+        for (int i = 1; i < nc; ++i) {
+            const Cross key = cr[i]; int j = i-1;
+            while (j >= 0 && cr[j].x > key.x) { cr[j+1]=cr[j]; --j; }
+            cr[j+1] = key;
+        }
+        for (int p = 0; p+1 < nc; p += 2) {
+            const int xli = std::max(0,    static_cast<int>(std::ceil(cr[p].x)));
+            const int xri = std::min(sw-1, static_cast<int>(std::floor(cr[p+1].x)));
+            if (xli > xri) continue;
+            const float span = cr[p+1].x - cr[p].x;
+            const float dI   = (span > 1e-6f) ? (cr[p+1].invZ - cr[p].invZ) / span : 0.f;
+            float invZ = cr[p].invZ + dI*(static_cast<float>(xli)+0.5f - cr[p].x);
+            const size_t row = static_cast<size_t>(y) * sw;
+            for (int x = xli; x <= xri; ++x, invZ += dI)
+                if (invZ > 0.f) fb.SetPixelDepthFast(row+x, color, 1.f/invZ);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Textured scanline fill (perspective-correct UV + Gouraud lighting).
+// ---------------------------------------------------------------------------
+void FillTextured(Framebuffer& fb, const std::vector<ScrVert>& poly,
                   const Texture& tex, int sw, int sh) {
     const int n = static_cast<int>(poly.size());
-    if (n < 3) { return; }
+    if (n < 3) return;
 
     float minY = poly[0].sy, maxY = poly[0].sy;
     for (int i = 1; i < n; ++i) {
@@ -82,9 +139,8 @@ void FillTextured(Framebuffer& fb, const std::vector<ProjVert>& poly,
         int nc = 0;
 
         for (int i = 0; i < n; ++i) {
-            const int j = (i+1==n) ? 0 : i+1;
-            const ProjVert& a = poly[i];
-            const ProjVert& b = poly[j];
+            const ScrVert& a = poly[i];
+            const ScrVert& b = poly[(i+1)%n];
             float ax,ay,ai,au,av,al, bx,by,bi,bu,bv,bl;
             if (a.sy <= b.sy) {
                 ax=a.sx; ay=a.sy; ai=a.invZ; au=a.uOverZ; av=a.vOverZ; al=a.litOverZ;
@@ -94,94 +150,236 @@ void FillTextured(Framebuffer& fb, const std::vector<ProjVert>& poly,
                 bx=a.sx; by=a.sy; bi=a.invZ; bu=a.uOverZ; bv=a.vOverZ; bl=a.litOverZ;
             }
             const float dy = by - ay;
-            if (dy < 1e-6f) { continue; }
+            if (dy < 1e-6f) continue;
             if (yc >= ay && yc < by) {
                 const float t = (yc - ay) / dy;
-                if (nc < 8) {
-                    cr[nc++] = {
-                        ax + t*(bx-ax), ai + t*(bi-ai),
-                        au + t*(bu-au), av + t*(bv-av), al + t*(bl-al)
-                    };
-                }
+                if (nc < 8) cr[nc++] = {
+                    ax + t*(bx-ax), ai + t*(bi-ai),
+                    au + t*(bu-au), av + t*(bv-av), al + t*(bl-al)
+                };
             }
         }
-        if (nc < 2) { continue; }
+        if (nc < 2) continue;
 
-        // Sort crossings left→right.
         for (int i = 1; i < nc; ++i) {
-            const Cross key = cr[i];
-            int j = i-1;
+            const Cross key = cr[i]; int j = i-1;
             while (j >= 0 && cr[j].x > key.x) { cr[j+1]=cr[j]; --j; }
             cr[j+1] = key;
         }
-
         for (int p = 0; p+1 < nc; p += 2) {
             const float xl = cr[p].x, xr = cr[p+1].x;
             const int xli = std::max(0,    static_cast<int>(std::ceil(xl)));
             const int xri = std::min(sw-1, static_cast<int>(std::floor(xr)));
-            if (xli > xri) { continue; }
+            if (xli > xri) continue;
             const float span = xr - xl;
-            const float isp  = (span > 1e-6f) ? 1.0f/span : 0.0f;
-            const float dI   = (cr[p+1].invZ - cr[p].invZ) * isp;
-            const float dU   = (cr[p+1].uZ   - cr[p].uZ)   * isp;
-            const float dV   = (cr[p+1].vZ   - cr[p].vZ)   * isp;
-            const float dL   = (cr[p+1].litZ  - cr[p].litZ) * isp;
-            const float offs = static_cast<float>(xli) + 0.5f - xl;
+            const float isp  = (span > 1e-6f) ? 1.f/span : 0.f;
+            const float dI = (cr[p+1].invZ - cr[p].invZ) * isp;
+            const float dU = (cr[p+1].uZ   - cr[p].uZ)   * isp;
+            const float dV = (cr[p+1].vZ   - cr[p].vZ)   * isp;
+            const float dL = (cr[p+1].litZ  - cr[p].litZ) * isp;
+            const float offs = static_cast<float>(xli)+0.5f - xl;
             float invZ = cr[p].invZ + dI*offs;
             float uZ   = cr[p].uZ   + dU*offs;
             float vZ   = cr[p].vZ   + dV*offs;
             float litZ = cr[p].litZ + dL*offs;
             const size_t row = static_cast<size_t>(y) * sw;
             for (int x = xli; x <= xri; ++x, invZ+=dI, uZ+=dU, vZ+=dV, litZ+=dL) {
-                if (invZ > 0.0f) {
-                    const float d = 1.0f / invZ;
-                    fb.SetPixelDepthFast(row+x,
-                        ApplyLight(tex.Sample(uZ*d, vZ*d), litZ*d), d);
+                if (invZ > 0.f) {
+                    const float d = 1.f / invZ;
+                    fb.SetPixelDepthFast(row+x, ApplyLight(tex.Sample(uZ*d, vZ*d), litZ*d), d);
                 }
             }
         }
     }
 }
 
-} // namespace
-
-WallRenderer::WallRenderer(int screenWidth, int screenHeight, float fieldOfViewRadians)
-    : m_screenWidth(screenWidth),
-      m_screenHeight(screenHeight) {
-    (void)fieldOfViewRadians;
+// ---------------------------------------------------------------------------
+// Helpers: 3D cross product and camera-space transform.
+// ---------------------------------------------------------------------------
+inline Vector3 Cross3(Vector3 a, Vector3 b) {
+    return { a.y*b.z - a.z*b.y, a.z*b.x - a.x*b.z, a.x*b.y - a.y*b.x };
 }
 
+std::vector<CamVert> ToCam(const std::vector<Vector3>& wv, const Camera& cam) {
+    std::vector<CamVert> cv(wv.size());
+    for (size_t i = 0; i < wv.size(); ++i) {
+        auto v = cam.ToView(wv[i]);
+        cv[i] = { v.x, v.y, v.z };
+    }
+    return cv;
+}
+
+// ---------------------------------------------------------------------------
+// Compute flat lighting for a face from its outward normal.
+// ---------------------------------------------------------------------------
+float FlatLit(const Vector3& normal, const Vector3& centroid,
+              const std::vector<PointLight>& lights, float ambient,
+              const DirectionalLight& sun) {
+    const Vector3 n = normal.Normalized();
+    const Vector3 toSun = Vector3(-sun.dirX, -sun.dirY, -sun.dirZ).Normalized();
+    const float lambert = std::max(0.f, Vector3::Dot(n, toSun));
+    float lit = ambient + sun.intensity * lambert * 0.6f;
+    for (const PointLight& pl : lights) {
+        const Vector3 toL = pl.position - centroid;
+        const float d2 = toL.LengthSquared();
+        if (d2 >= pl.radiusSq || d2 < 1e-6f) continue;
+        const float diff = std::max(0.f, Vector3::Dot(n, toL.Normalized()));
+        const float t2 = d2 / pl.radiusSq;
+        lit += (1.f-t2)*(1.f-t2)*pl.intensity*diff;
+    }
+    return lit < 1.f ? lit : 1.f;
+}
+
+} // namespace
+
+// ---------------------------------------------------------------------------
+WallRenderer::WallRenderer(int screenWidth, int screenHeight, float fov)
+    : m_screenWidth(screenWidth), m_screenHeight(screenHeight) { (void)fov; }
+
+// ---------------------------------------------------------------------------
+// DrawWall — renders a solid volumetric wall as a box with 5 visible faces:
+//   · Front face  — textured, Gouraud-lit (the visible interior surface)
+//   · Back face   — flat-shaded (seen through open portals/doorways)
+//   · Top cap     — flat-shaded, darker
+//   · Left cap    — flat-shaded, slightly darker
+//   · Right cap   — flat-shaded, slightly darker
+// Every face uses backface culling and the depth buffer, identical to the
+// MeshRenderer pipeline so walls and cubes sort correctly against each other.
+// ---------------------------------------------------------------------------
 void WallRenderer::DrawWall(Framebuffer& framebuffer, const Camera& camera,
                             Vector3 start, Vector3 end,
                             float bottomHeight, float topHeight,
                             const std::vector<PointLight>& lights, float ambientLight,
                             const DirectionalLight& sunLight,
                             const Texture& texture) const {
-    // Build a quad of 4 world-space corners with per-corner Gouraud lighting,
-    // transform all corners through the full 3D camera, clip, project, fill.
-    std::array<WallVert, 4> verts = {{
-        {start.x, bottomHeight, start.z, 0.f, 1.f,
-            ComputeLighting(start.x, bottomHeight, start.z, lights, ambientLight, sunLight)},
-        {end.x,   bottomHeight, end.z,   1.f, 1.f,
-            ComputeLighting(end.x,   bottomHeight, end.z,   lights, ambientLight, sunLight)},
-        {end.x,   topHeight,    end.z,   1.f, 0.f,
-            ComputeLighting(end.x,   topHeight,    end.z,   lights, ambientLight, sunLight)},
-        {start.x, topHeight,    start.z, 0.f, 0.f,
-            ComputeLighting(start.x, topHeight,    start.z, lights, ambientLight, sunLight)},
-    }};
+    const int sw = m_screenWidth, sh = m_screenHeight;
 
-    // Transform to camera space using the full 3D basis (yaw + pitch).
-    for (WallVert& w : verts) {
-        const Camera::View v = camera.ToView({w.vx, w.vy, w.vz});
-        w.vx = v.x; w.vy = v.y; w.vz = v.z;
+    // Wall tangent and length.
+    const float dx = end.x - start.x;
+    const float dz = end.z - start.z;
+    const float len = std::sqrt(dx*dx + dz*dz);
+    if (len < 1e-6f) return;
+
+    // Outward-facing horizontal normal.  For a CCW wall start→end the outward
+    // normal is (-dz, 0, dx) / len.  Flip it so it points toward the camera.
+    float nx = -dz / len, nz = dx / len;
+    const Vector3 mid = { (start.x+end.x)*0.5f, (bottomHeight+topHeight)*0.5f,
+                           (start.z+end.z)*0.5f };
+    if (nx*(camera.position.x - mid.x) + nz*(camera.position.z - mid.z) < 0.f) {
+        nx = -nx; nz = -nz;
     }
 
-    std::vector<WallVert> clipped = ClipNear(verts);
-    if (clipped.size() < 3) { return; }
+    // Build the 8 corners of the box.
+    const float half = kWallThickness * 0.5f;
+    const float ox = nx * half, oz = nz * half;
 
-    std::vector<ProjVert> poly;
-    poly.reserve(clipped.size());
-    for (const WallVert& w : clipped) { poly.push_back(Project(w, camera)); }
+    // Front (outward) face corners F0..F3, back B0..B3.
+    const Vector3 F0 = { start.x + ox, bottomHeight, start.z + oz };
+    const Vector3 F1 = { end.x   + ox, bottomHeight, end.z   + oz };
+    const Vector3 F2 = { end.x   + ox, topHeight,    end.z   + oz };
+    const Vector3 F3 = { start.x + ox, topHeight,    start.z + oz };
+    const Vector3 B0 = { start.x - ox, bottomHeight, start.z - oz };
+    const Vector3 B1 = { end.x   - ox, bottomHeight, end.z   - oz };
+    const Vector3 B2 = { end.x   - ox, topHeight,    end.z   - oz };
+    const Vector3 B3 = { start.x - ox, topHeight,    start.z - oz };
 
-    FillTextured(framebuffer, poly, texture, m_screenWidth, m_screenHeight);
+    // -----------------------------------------------------------------------
+    // Lambda: draw a flat-shaded polygon face.
+    // wv must be listed CCW when viewed from the outside (outward normal by RHR).
+    // -----------------------------------------------------------------------
+    auto drawFlat = [&](const std::vector<Vector3>& wv, uint32_t baseColor) {
+        // Outward normal via cross product of first two edges (CCW → outward).
+        const Vector3 normal = Cross3(wv[1]-wv[0], wv[2]-wv[0]);
+        if (normal.LengthSquared() < 1e-10f) return;
+        // Backface cull: dot(normal, cameraPos - vertex) must be > 0.
+        if (Vector3::Dot(normal, camera.position - wv[0]) <= 0.f) return;
+
+        // Flat shading from face normal.
+        const Vector3 centroid = (wv[0]+wv[1]+wv[2]) / 3.f;
+        const float lit = FlatLit(normal, centroid, lights, ambientLight, sunLight);
+        const uint32_t color = ApplyLight(baseColor, lit);
+
+        // Transform to camera space.
+        auto cv = ToCam(wv, camera);
+
+        // Near-clip.
+        auto lerpCam = [](const CamVert& a, const CamVert& b, float t) -> CamVert {
+            return { a.x+t*(b.x-a.x), a.y+t*(b.y-a.y), kNearPlane };
+        };
+        auto clipped = ClipNear(cv, lerpCam);
+        if (clipped.size() < 3) return;
+
+        // Project to screen.
+        std::vector<ScrVert> poly(clipped.size());
+        for (size_t i = 0; i < clipped.size(); ++i)
+            poly[i] = Project(clipped[i], camera);
+
+        FillFlat(framebuffer, poly, color, sw, sh);
+    };
+
+    // -----------------------------------------------------------------------
+    // Draw textured front face with per-corner Gouraud lighting.
+    // wv = { F0, F1, F2, F3 }, UVs = bottom-left→bottom-right→top-right→top-left.
+    // -----------------------------------------------------------------------
+    {
+        const std::vector<Vector3> wv = { F0, F1, F2, F3 };
+        const Vector3 normal = Cross3(wv[1]-wv[0], wv[2]-wv[0]);
+        if (normal.LengthSquared() >= 1e-10f &&
+            Vector3::Dot(normal, camera.position - wv[0]) > 0.f) {
+
+            // Per-corner UV and lighting.
+            const float us[4] = { 0.f, 1.f, 1.f, 0.f };
+            const float vs[4] = { 1.f, 1.f, 0.f, 0.f };
+            float lits[4];
+            for (int i = 0; i < 4; ++i)
+                lits[i] = ComputeLighting(wv[i].x, wv[i].y, wv[i].z,
+                                          lights, ambientLight, sunLight);
+
+            // Extended vertex type for textured clipping.
+            struct TexVert { float x, y, z, u, v, lit; };
+            std::vector<TexVert> tv(4);
+            for (int i = 0; i < 4; ++i) {
+                auto cv = camera.ToView(wv[i]);
+                tv[i] = { cv.x, cv.y, cv.z, us[i], vs[i], lits[i] };
+            }
+
+            auto lerpTex = [](const TexVert& a, const TexVert& b, float t) -> TexVert {
+                return { a.x+t*(b.x-a.x), a.y+t*(b.y-a.y), kNearPlane,
+                         a.u+t*(b.u-a.u), a.v+t*(b.v-a.v), a.lit+t*(b.lit-a.lit) };
+            };
+            auto clipped = ClipNear(tv, lerpTex);
+            if (clipped.size() >= 3) {
+                std::vector<ScrVert> poly(clipped.size());
+                for (size_t i = 0; i < clipped.size(); ++i) {
+                    const float invZ = 1.f / clipped[i].z;
+                    poly[i] = {
+                        camera.halfWidth  + clipped[i].x * invZ * camera.focalLength,
+                        camera.halfHeight - clipped[i].y * invZ * camera.focalLength,
+                        invZ,
+                        clipped[i].u   * invZ,
+                        clipped[i].v   * invZ,
+                        clipped[i].lit * invZ
+                    };
+                }
+                FillTextured(framebuffer, poly, texture, sw, sh);
+            }
+        }
+    }
+
+    // Base color palette for untextured faces (slightly darker for depth cues).
+    const uint32_t kBack = Framebuffer::MakeColor(140, 118, 88);
+    const uint32_t kTop  = Framebuffer::MakeColor(100,  84, 62);
+    const uint32_t kCap  = Framebuffer::MakeColor(120, 100, 74);
+
+    // Back face — CCW from outside (back): B1 B0 B3 B2
+    drawFlat({ B1, B0, B3, B2 }, kBack);
+
+    // Top cap — CCW from above: F3 F2 B2 B3
+    drawFlat({ F3, F2, B2, B3 }, kTop);
+
+    // Left cap (start end) — CCW from left: B0 F0 F3 B3
+    drawFlat({ B0, F0, F3, B3 }, kCap);
+
+    // Right cap (end end) — CCW from right: F1 B1 B2 F2
+    drawFlat({ F1, B1, B2, F2 }, kCap);
 }
