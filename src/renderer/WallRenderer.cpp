@@ -284,40 +284,6 @@ void WallRenderer::DrawWall(Framebuffer& framebuffer, const Camera& camera,
     const Vector3 B3 = { start.x - ox, topHeight,    start.z - oz };
 
     // -----------------------------------------------------------------------
-    // Lambda: draw a flat-shaded polygon face.
-    // wv must be listed CCW when viewed from the outside (outward normal by RHR).
-    // -----------------------------------------------------------------------
-    auto drawFlat = [&](const std::vector<Vector3>& wv, uint32_t baseColor) {
-        // Outward normal via cross product of first two edges (CCW → outward).
-        const Vector3 normal = Cross3(wv[1]-wv[0], wv[2]-wv[0]);
-        if (normal.LengthSquared() < 1e-10f) return;
-        // Backface cull: dot(normal, cameraPos - vertex) must be > 0.
-        if (Vector3::Dot(normal, camera.position - wv[0]) <= 0.f) return;
-
-        // Flat shading from face normal.
-        const Vector3 centroid = (wv[0]+wv[1]+wv[2]) / 3.f;
-        const float lit = FlatLit(normal, centroid, lights, ambientLight, sunLight);
-        const uint32_t color = ApplyLight(baseColor, lit);
-
-        // Transform to camera space.
-        auto cv = ToCam(wv, camera);
-
-        // Near-clip.
-        auto lerpCam = [](const CamVert& a, const CamVert& b, float t) -> CamVert {
-            return { a.x+t*(b.x-a.x), a.y+t*(b.y-a.y), kNearPlane };
-        };
-        auto clipped = ClipNear(cv, lerpCam);
-        if (clipped.size() < 3) return;
-
-        // Project to screen.
-        std::vector<ScrVert> poly(clipped.size());
-        for (size_t i = 0; i < clipped.size(); ++i)
-            poly[i] = Project(clipped[i], camera);
-
-        FillFlat(framebuffer, poly, color, sw, sh);
-    };
-
-    // -----------------------------------------------------------------------
     // Draw textured front face with per-corner Gouraud lighting.
     // wv = { F0, F1, F2, F3 }, UVs = bottom-left→bottom-right→top-right→top-left.
     // -----------------------------------------------------------------------
@@ -366,20 +332,53 @@ void WallRenderer::DrawWall(Framebuffer& framebuffer, const Camera& camera,
         }
     }
 
-    // Base color palette for untextured faces (slightly darker for depth cues).
+    // -----------------------------------------------------------------------
+    // Lambda: draw a flat-shaded polygon face (backface-culled, lit by normal).
+    // -----------------------------------------------------------------------
+    auto drawFlat = [&](const std::vector<Vector3>& wv, uint32_t baseColor) {
+        if (wv.size() < 3) return;
+
+        // Compute outward normal from first two edges (CCW winding assumed).
+        const Vector3 normal = Cross3(wv[1] - wv[0], wv[2] - wv[0]);
+        if (normal.LengthSquared() < 1e-10f) return;
+
+        // Backface cull: skip if camera is on the inward (wrong) side.
+        if (Vector3::Dot(normal, camera.position - wv[0]) <= 0.f) return;
+
+        // Flat lighting from the face normal (Lambert sun + point lights).
+        const Vector3 centroid = (wv[0] + wv[1] + wv[2]) / 3.f;
+        const float lit = FlatLit(normal, centroid, lights, ambientLight, sunLight);
+        const uint32_t color = ApplyLight(baseColor, lit);
+
+        // Transform to camera space, clip, project, fill.
+        auto cv = ToCam(wv, camera);
+        auto lerpCam = [](const CamVert& a, const CamVert& b, float t) -> CamVert {
+            return { a.x + t*(b.x-a.x), a.y + t*(b.y-a.y), kNearPlane };
+        };
+        auto clipped = ClipNear(cv, lerpCam);
+        if (clipped.size() < 3) return;
+
+        std::vector<ScrVert> poly(clipped.size());
+        for (size_t i = 0; i < clipped.size(); ++i)
+            poly[i] = Project(clipped[i], camera);
+
+        FillFlat(framebuffer, poly, color, sw, sh);
+    };
+
+    // Base color palette for untextured faces (depth-cued shading).
     const uint32_t kBack = Framebuffer::MakeColor(140, 118, 88);
     const uint32_t kTop  = Framebuffer::MakeColor(100,  84, 62);
     const uint32_t kCap  = Framebuffer::MakeColor(120, 100, 74);
 
-    // Back face — CCW from outside (back): B1 B0 B3 B2
-    drawFlat({ B1, B0, B3, B2 }, kBack);
+    // Back face — CCW from outside (inward-facing): B0, B3, B2, B1
+    drawFlat({ B0, B3, B2, B1 }, kBack);
 
-    // Top cap — CCW from above: F3 F2 B2 B3
+    // Top cap — CCW from above: F3, F2, B2, B3
     drawFlat({ F3, F2, B2, B3 }, kTop);
 
-    // Left cap (start end) — CCW from left: B0 F0 F3 B3
-    drawFlat({ B0, F0, F3, B3 }, kCap);
+    // Left cap (start side) — CCW from left side: F0, B0, B3, F3
+    drawFlat({ F0, B0, B3, F3 }, kCap);
 
-    // Right cap (end end) — CCW from right: F1 B1 B2 F2
-    drawFlat({ F1, B1, B2, F2 }, kCap);
+    // Right cap (end side) — CCW from right side: B1, F1, F2, B2
+    drawFlat({ B1, F1, F2, B2 }, kCap);
 }
