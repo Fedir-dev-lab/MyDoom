@@ -414,7 +414,12 @@ void Menu::DrawSettings(Framebuffer& fb) const {
         DrawText(fb, vx,        iy,        resBuf,
                  sel ? kSel : Framebuffer::MakeColor(80, 160, 220), kSS);
 
-        if (sel) {
+        // Show inline sub-hint only when kSub < kSS (i.e. sf >= 1.0),
+        // so it's visually smaller than the item label. At 320x180 (sf=0.5)
+        // both scales collapse to 1 — the hint would look as large as the
+        // item itself, breaking hierarchy. In that case the footer hint
+        // "ENTER  CYCLE" is enough.
+        if (sel && kSub < kSS) {
             const char* hint2 = "ENTER TO CYCLE";
             const int h2y = iy + 5 * kSS + S(4);
             DrawText(fb, ix + S(1), h2y + S(1), hint2, kShadow, kSub);
