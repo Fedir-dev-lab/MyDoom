@@ -140,12 +140,13 @@ WallRenderer::WallRenderer(int screenWidth, int screenHeight, float fov)
     : m_screenWidth(screenWidth), m_screenHeight(screenHeight) { (void)fov; }
 
 // ---------------------------------------------------------------------------
-// DrawWall — renders a solid volumetric wall as a box with 5 visible faces:
-//   · Front face  — textured, Gouraud-lit (the visible interior surface)
-//   · Back face   — flat-shaded (seen through open portals/doorways)
-//   · Top cap     — flat-shaded, darker
-//   · Left cap    — flat-shaded, slightly darker
-//   · Right cap   — flat-shaded, slightly darker
+// DrawWall — renders a solid volumetric wall as a box with 6 textured faces:
+//   · Front face  — textured, Gouraud-lit (the visible surface facing outward)
+//   · Back face   — textured (seen from the opposite side)
+//   · Top cap     — textured (seen from above)
+//   · Bottom cap  — textured (seen from below)
+//   · Left cap    — textured (start end of wall)
+//   · Right cap   — textured (end end of wall)
 // Every face uses backface culling and the depth buffer, identical to the
 // MeshRenderer pipeline so walls and cubes sort correctly against each other.
 // ---------------------------------------------------------------------------
@@ -250,9 +251,17 @@ void WallRenderer::DrawWall(Framebuffer& framebuffer, const Camera& camera,
     }
 
     // Top cap: F3→F2→B2→B3
-    // Map texture across the thickness (narrow strip)
+    // Normal points up (+Y). UV mapped across the narrow thickness.
     {
         const std::vector<Vector3> wv = { F3, F2, B2, B3 };
+        const float uvs[8] = { 0.f,0.f,  1.f,0.f,  1.f,1.f,  0.f,1.f };
+        drawTexFace(wv, uvs);
+    }
+
+    // Bottom cap: F0→B0→B1→F1
+    // Normal points down (-Y). Same UV layout as top.
+    {
+        const std::vector<Vector3> wv = { F0, B0, B1, F1 };
         const float uvs[8] = { 0.f,0.f,  1.f,0.f,  1.f,1.f,  0.f,1.f };
         drawTexFace(wv, uvs);
     }
