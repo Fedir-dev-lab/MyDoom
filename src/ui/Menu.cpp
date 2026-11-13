@@ -256,9 +256,12 @@ void Menu::DrawMain(Framebuffer& fb) const {
 
     const int kSub   = std::max(1, static_cast<int>(sf));
     const char* hint = "W S  MOVE   ENTER  SELECT   ESC  BACK";
-    const int footerY = H - 5 * kSub - S(8);
-    DrawText(fb, cx - TextWidth(hint, kSub) / 2 + S(1), footerY + S(1),
-             hint, kShadow, kSub);
+    // Footer: scale=kSub, vertically anchored at H - S(16).
+    // Shadow is only drawn when sf>=1 (kSub has room to differ from kSS).
+    const int footerY = H - S(16);
+    if (kSub > 1)
+        DrawText(fb, cx - TextWidth(hint, kSub) / 2 + 1, footerY + 1,
+                 hint, kShadow, kSub);
     DrawText(fb, cx - TextWidth(hint, kSub) / 2, footerY,
              hint, Framebuffer::MakeColor(100, 86, 70), kSub);
 }
@@ -336,9 +339,10 @@ void Menu::DrawSlotScreen(Framebuffer& fb, bool isSave) const {
 
     const char* hint = isSave ? "ENTER  SAVE   ESC  BACK"
                                : "ENTER  LOAD   ESC  BACK";
-    const int footerY = H - 5 * kSub - S(8);
-    DrawText(fb, cx - TextWidth(hint, kSub) / 2 + S(1), footerY + S(1),
-             hint, kShadow, kSub);
+    const int footerY = H - S(16);
+    if (kSub > 1)
+        DrawText(fb, cx - TextWidth(hint, kSub) / 2 + 1, footerY + 1,
+                 hint, kShadow, kSub);
     DrawText(fb, cx - TextWidth(hint, kSub) / 2, footerY,
              hint, Framebuffer::MakeColor(100, 86, 70), kSub);
 }
@@ -439,9 +443,10 @@ void Menu::DrawSettings(Framebuffer& fb) const {
     const char* hint = (m_selectedIndex == 4)             ? "ENTER  CYCLE   ESC  BACK"
                      : (m_selectedIndex == kSettingsItems) ? "ENTER  SELECT   ESC  BACK"
                      :                                       "ENTER  TOGGLE   ESC  BACK";
-    const int footerY = H - 5 * kSub - S(8);
-    DrawText(fb, cx - TextWidth(hint, kSub) / 2 + S(1), footerY + S(1),
-             hint, kShadow, kSub);
+    const int footerY = H - S(16);
+    if (kSub > 1)
+        DrawText(fb, cx - TextWidth(hint, kSub) / 2 + 1, footerY + 1,
+                 hint, kShadow, kSub);
     DrawText(fb, cx - TextWidth(hint, kSub) / 2, footerY,
              hint, Framebuffer::MakeColor(100, 86, 70), kSub);
 }
