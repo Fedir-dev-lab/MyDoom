@@ -1,6 +1,7 @@
 #include "Menu.h"
 
 #include <array>
+#include <cctype>
 #include <cstdio>
 
 #include "renderer/Framebuffer.h"
@@ -13,6 +14,7 @@ namespace {
 using Glyph = std::array<uint8_t, 5>;
 
 Glyph GetGlyph(char c) {
+    c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
     switch (c) {
         case '0': return {0b111,0b101,0b101,0b101,0b111};
         case '1': return {0b010,0b110,0b010,0b010,0b111};
@@ -214,47 +216,51 @@ void Menu::Draw(Framebuffer& fb) const {
 // ---------------------------------------------------------------------------
 void Menu::DrawMain(Framebuffer& fb) const {
     const int W = fb.Width(), H = fb.Height(), cx = W / 2;
+    const float sf = static_cast<float>(W) / 640.0f;
+    const auto S = [&](int v) { return std::max(1, static_cast<int>(v * sf)); };
 
-    const uint32_t kTitle   = Framebuffer::MakeColor(180, 30, 30);
-    const uint32_t kSel     = Framebuffer::MakeColor(220, 200, 60);
-    const uint32_t kNormal  = Framebuffer::MakeColor(120, 100, 80);
-    const uint32_t kShadow  = Framebuffer::MakeColor(30, 20, 20);
+    const uint32_t kTitle  = Framebuffer::MakeColor(180, 30, 30);
+    const uint32_t kSel    = Framebuffer::MakeColor(220, 200, 60);
+    const uint32_t kNormal = Framebuffer::MakeColor(120, 100, 80);
+    const uint32_t kShadow = Framebuffer::MakeColor(30,  20, 20);
 
-    // Title
-    constexpr int kTS = 4;
+    const int kTS = std::max(1, static_cast<int>(4 * sf));
     const char* title = "MYDOOMENGINE";
     const int tx = cx - TextWidth(title, kTS) / 2;
     const int ty = H / 6;
-    DrawText(fb, tx+2, ty+2, title, kShadow, kTS);
-    DrawText(fb, tx,   ty,   title, kTitle,  kTS);
+    DrawText(fb, tx + S(2), ty + S(2), title, kShadow, kTS);
+    DrawText(fb, tx,        ty,        title, kTitle,  kTS);
 
-    // Separator
-    const int lineY = ty + 5*kTS + 8;
-    fb.DrawLine(cx-120, lineY, cx+120, lineY, Framebuffer::MakeColor(80, 30, 30));
+    const int lineY = ty + 5 * kTS + S(8);
+    fb.DrawLine(cx - S(120), lineY, cx + S(120), lineY,
+                Framebuffer::MakeColor(80, 30, 30));
 
     const char* items[kMainItems] = { "NEW GAME", "LOAD GAME", "SETTINGS", "EXIT" };
-    constexpr int kIS = 3;
-    const int startY = lineY + 20;
-    const int step   = 5*kIS + 10;
+    const int kIS    = std::max(1, static_cast<int>(3 * sf));
+    const int startY = lineY + S(20);
+    const int step   = 5 * kIS + S(10);
 
     for (int i = 0; i < kMainItems; ++i) {
-        const int iw = TextWidth(items[i], kIS);
-        const int ix = cx - iw / 2;
-        const int iy = startY + i * step;
+        const int iw  = TextWidth(items[i], kIS);
+        const int ix  = cx - iw / 2;
+        const int iy  = startY + i * step;
         const bool sel = (i == m_selectedIndex);
-        DrawText(fb, ix+1, iy+1, items[i], kShadow, kIS);
+        DrawText(fb, ix + S(1), iy + S(1), items[i], kShadow, kIS);
         if (sel) {
-            DrawText(fb, ix - 4*kIS, iy, ">", kSel, kIS);
+            DrawText(fb, ix - 4 * kIS, iy, ">", kSel, kIS);
             DrawText(fb, ix, iy, items[i], kSel, kIS);
         } else {
             DrawText(fb, ix, iy, items[i], kNormal, kIS);
         }
     }
 
-    // Footer
+    const int kSub   = std::max(1, static_cast<int>(sf));
     const char* hint = "W S  MOVE   ENTER  SELECT   ESC  BACK";
-    DrawText(fb, cx - TextWidth(hint,1)/2, H-16, hint,
-             Framebuffer::MakeColor(60,50,50), 1);
+    const int footerY = H - 5 * kSub - S(8);
+    DrawText(fb, cx - TextWidth(hint, kSub) / 2 + S(1), footerY + S(1),
+             hint, kShadow, kSub);
+    DrawText(fb, cx - TextWidth(hint, kSub) / 2, footerY,
+             hint, Framebuffer::MakeColor(100, 86, 70), kSub);
 }
 
 // ---------------------------------------------------------------------------
@@ -262,75 +268,79 @@ void Menu::DrawMain(Framebuffer& fb) const {
 // ---------------------------------------------------------------------------
 void Menu::DrawSlotScreen(Framebuffer& fb, bool isSave) const {
     const int W = fb.Width(), H = fb.Height(), cx = W / 2;
+    const float sf = static_cast<float>(W) / 640.0f;
+    const auto S = [&](int v) { return std::max(1, static_cast<int>(v * sf)); };
 
     const uint32_t kTitle  = Framebuffer::MakeColor(180, 30, 30);
     const uint32_t kSel    = Framebuffer::MakeColor(220, 200, 60);
     const uint32_t kNormal = Framebuffer::MakeColor(120, 100, 80);
     const uint32_t kEmpty  = Framebuffer::MakeColor(55,  44, 38);
     const uint32_t kShadow = Framebuffer::MakeColor(20,  15, 15);
-    const uint32_t kOver   = Framebuffer::MakeColor(180, 60, 60); // overwrite warning
+    const uint32_t kOver   = Framebuffer::MakeColor(180, 60, 60);
 
-    constexpr int kTS = 3;
+    const int kTS = std::max(1, static_cast<int>(3 * sf));
     const char* title = isSave ? "SAVE GAME" : "LOAD GAME";
     const int tx = cx - TextWidth(title, kTS) / 2;
     const int ty = H / 8;
-    DrawText(fb, tx+1, ty+1, title, kShadow, kTS);
-    DrawText(fb, tx,   ty,   title, kTitle,  kTS);
+    DrawText(fb, tx + S(1), ty + S(1), title, kShadow, kTS);
+    DrawText(fb, tx,        ty,        title, kTitle,  kTS);
 
-    constexpr int kSS = 2;
-    const int startY = ty + 5*kTS + 24;
-    const int step   = 5*kSS + 14;
+    const int kSS    = std::max(1, static_cast<int>(2 * sf));
+    const int kSub   = std::max(1, static_cast<int>(sf));
+    const int startY = ty + 5 * kTS + S(24);
+    const int step   = 5 * kSS + S(14);
 
     for (int slot = 0; slot < kSaveSlotCount; ++slot) {
-        const int iy  = startY + slot * step;
+        const int iy   = startY + slot * step;
         const bool sel = (slot == m_selectedIndex);
         const SaveSlotInfo info = SaveSystem::GetSlotInfo(slot);
 
         char label[10];
         std::snprintf(label, sizeof(label), "SLOT %d", slot + 1);
 
-        const int lx = cx - 100;
+        const int lx = cx - S(100);
         const uint32_t lc = sel ? kSel : kNormal;
 
-        if (sel) DrawText(fb, lx - 4*kSS, iy, ">", kSel, kSS);
-        DrawText(fb, lx+1, iy+1, label, kShadow, kSS);
-        DrawText(fb, lx,   iy,   label, lc,      kSS);
+        if (sel) DrawText(fb, lx - 4 * kSS, iy, ">", kSel, kSS);
+        DrawText(fb, lx + S(1), iy + S(1), label, kShadow, kSS);
+        DrawText(fb, lx,        iy,        label, lc,      kSS);
 
-        const int ix = lx + TextWidth(label, kSS) + 16;
+        const int ix = lx + TextWidth(label, kSS) + S(16);
 
         if (info.exists) {
-            // On Save screen, warn that this slot will be overwritten
             const uint32_t infoColor = isSave && sel ? kOver
                                      : sel           ? kSel
                                                      : kNormal;
-            DrawText(fb, ix+1, iy+1, info.description, kShadow, kSS);
-            DrawText(fb, ix,   iy,   info.description, infoColor, kSS);
+            DrawText(fb, ix + S(1), iy + S(1), info.description, kShadow, kSS);
+            DrawText(fb, ix,        iy,        info.description, infoColor, kSS);
             if (isSave && sel) {
                 const char* warn = "OVERWRITE?";
-                const int wx = lx + TextWidth(label, kSS) + 10;
-                DrawText(fb, wx, iy + 5*kSS + 4, warn, kOver, 1);
+                const int wx = lx + TextWidth(label, kSS) + S(10);
+                const int wy = iy + 5 * kSS + S(4);
+                DrawText(fb, wx + S(1), wy + S(1), warn, kShadow, kSub);
+                DrawText(fb, wx,        wy,        warn, kOver,   kSub);
             }
         } else {
             const char* empty = isSave ? "--- NEW SAVE ---" : "--- EMPTY ---";
-            const uint32_t ec = sel ? kSel : kEmpty;
-            DrawText(fb, ix, iy, empty, ec, kSS);
+            DrawText(fb, ix, iy, empty, sel ? kSel : kEmpty, kSS);
         }
     }
 
-    // BACK row
-    const int backY  = startY + kSaveSlotCount * step + 8;
+    const int backY   = startY + kSaveSlotCount * step + S(8);
     const bool backSel = (m_selectedIndex == kSaveSlotCount);
     const char* backText = "BACK";
     const int bx = cx - TextWidth(backText, kSS) / 2;
-    if (backSel) DrawText(fb, bx - 4*kSS, backY, ">", kSel, kSS);
-    DrawText(fb, bx+1, backY+1, backText, kShadow, kSS);
-    DrawText(fb, bx,   backY,   backText, backSel ? kSel : kNormal, kSS);
+    if (backSel) DrawText(fb, bx - 4 * kSS, backY, ">", kSel, kSS);
+    DrawText(fb, bx + S(1), backY + S(1), backText, kShadow, kSS);
+    DrawText(fb, bx,        backY,        backText, backSel ? kSel : kNormal, kSS);
 
-    // Footer
     const char* hint = isSave ? "ENTER  SAVE   ESC  BACK"
                                : "ENTER  LOAD   ESC  BACK";
-    DrawText(fb, cx - TextWidth(hint,1)/2, H-16, hint,
-             Framebuffer::MakeColor(60,50,50), 1);
+    const int footerY = H - 5 * kSub - S(8);
+    DrawText(fb, cx - TextWidth(hint, kSub) / 2 + S(1), footerY + S(1),
+             hint, kShadow, kSub);
+    DrawText(fb, cx - TextWidth(hint, kSub) / 2, footerY,
+             hint, Framebuffer::MakeColor(100, 86, 70), kSub);
 }
 
 // ---------------------------------------------------------------------------
@@ -338,6 +348,8 @@ void Menu::DrawSlotScreen(Framebuffer& fb, bool isSave) const {
 // ---------------------------------------------------------------------------
 void Menu::DrawSettings(Framebuffer& fb) const {
     const int W = fb.Width(), H = fb.Height(), cx = W / 2;
+    const float sf = static_cast<float>(W) / 640.0f;
+    const auto S = [&](int v) { return std::max(1, static_cast<int>(v * sf)); };
 
     const uint32_t kTitle  = Framebuffer::MakeColor(180, 30, 30);
     const uint32_t kSel    = Framebuffer::MakeColor(220, 200, 60);
@@ -346,18 +358,18 @@ void Menu::DrawSettings(Framebuffer& fb) const {
     const uint32_t kOff    = Framebuffer::MakeColor(160,  60, 60);
     const uint32_t kShadow = Framebuffer::MakeColor(20,   15, 15);
 
-    constexpr int kTS = 3;
+    const int kTS = std::max(1, static_cast<int>(3 * sf));
     const char* title = "SETTINGS";
     const int tx = cx - TextWidth(title, kTS) / 2;
     const int ty = H / 8;
-    DrawText(fb, tx+1, ty+1, title, kShadow, kTS);
-    DrawText(fb, tx,   ty,   title, kTitle,  kTS);
+    DrawText(fb, tx + S(1), ty + S(1), title, kShadow, kTS);
+    DrawText(fb, tx,        ty,        title, kTitle,  kTS);
 
-    constexpr int kSS = 2;
-    const int startY = ty + 5*kTS + 24;
-    const int step   = 5*kSS + 14;
+    const int kSS    = std::max(1, static_cast<int>(2 * sf));
+    const int kSub   = std::max(1, static_cast<int>(sf));
+    const int startY = ty + 5 * kTS + S(24);
+    const int step   = 5 * kSS + S(14);
 
-    // First 4 items are ON/OFF toggles, 5th is resolution cycle.
     struct BoolItem { const char* label; bool value; };
     const BoolItem boolItems[4] = {
         {"HEAD BOB",   m_settingBob},
@@ -366,20 +378,20 @@ void Menu::DrawSettings(Framebuffer& fb) const {
         {"FULLSCREEN", m_settingFullscreen},
     };
 
-    // Draw the 4 bool toggles
     for (int i = 0; i < 4; ++i) {
-        const int iy  = startY + i * step;
+        const int iy   = startY + i * step;
         const bool sel = (i == m_selectedIndex);
-        const int ix  = cx - 80;
+        const int ix   = cx - S(80);
 
-        if (sel) DrawText(fb, ix - 4*kSS, iy, ">", kSel, kSS);
-        DrawText(fb, ix+1, iy+1, boolItems[i].label, kShadow, kSS);
-        DrawText(fb, ix,   iy,   boolItems[i].label, sel ? kSel : kNormal, kSS);
+        if (sel) DrawText(fb, ix - 4 * kSS, iy, ">", kSel, kSS);
+        DrawText(fb, ix + S(1), iy + S(1), boolItems[i].label, kShadow, kSS);
+        DrawText(fb, ix,        iy,        boolItems[i].label, sel ? kSel : kNormal, kSS);
 
         const char* val = boolItems[i].value ? "ON" : "OFF";
-        const int vx = ix + TextWidth(boolItems[i].label, kSS) + 20;
-        DrawText(fb, vx+1, iy+1, val, kShadow, kSS);
-        DrawText(fb, vx,   iy,   val, sel ? kSel : (boolItems[i].value ? kOn : kOff), kSS);
+        const int vx = ix + TextWidth(boolItems[i].label, kSS) + S(20);
+        DrawText(fb, vx + S(1), iy + S(1), val, kShadow, kSS);
+        DrawText(fb, vx,        iy,        val,
+                 sel ? kSel : (boolItems[i].value ? kOn : kOff), kSS);
     }
 
     // Resolution item (index 4)
@@ -387,40 +399,44 @@ void Menu::DrawSettings(Framebuffer& fb) const {
         const int i   = 4;
         const int iy  = startY + i * step;
         const bool sel = (i == m_selectedIndex);
-        const int ix  = cx - 80;
+        const int ix  = cx - S(80);
 
-        if (sel) DrawText(fb, ix - 4*kSS, iy, ">", kSel, kSS);
-        DrawText(fb, ix+1, iy+1, "RESOLUTION", kShadow, kSS);
-        DrawText(fb, ix,   iy,   "RESOLUTION", sel ? kSel : kNormal, kSS);
+        if (sel) DrawText(fb, ix - 4 * kSS, iy, ">", kSel, kSS);
+        DrawText(fb, ix + S(1), iy + S(1), "RESOLUTION", kShadow, kSS);
+        DrawText(fb, ix,        iy,        "RESOLUTION", sel ? kSel : kNormal, kSS);
 
-        // Show current resolution as "320x180" / "640x360" / "1280x720"
         char resBuf[16];
         const int rw = kResolutions[m_resolutionIndex];
         const int rh = rw * 9 / 16;
         std::snprintf(resBuf, sizeof(resBuf), "%dx%d", rw, rh);
-        const int vx = ix + TextWidth("RESOLUTION", kSS) + 20;
-        DrawText(fb, vx+1, iy+1, resBuf, kShadow, kSS);
-        // Resolution uses a blue-ish colour to distinguish from ON/OFF
-        const uint32_t resColor = sel ? kSel : Framebuffer::MakeColor(80, 160, 220);
-        DrawText(fb, vx,   iy,   resBuf, resColor, kSS);
+        const int vx = ix + TextWidth("RESOLUTION", kSS) + S(20);
+        DrawText(fb, vx + S(1), iy + S(1), resBuf, kShadow, kSS);
+        DrawText(fb, vx,        iy,        resBuf,
+                 sel ? kSel : Framebuffer::MakeColor(80, 160, 220), kSS);
 
-        // Small hint under selected resolution item
         if (sel) {
             const char* hint2 = "ENTER TO CYCLE";
-            DrawText(fb, ix, iy + 5*kSS + 3, hint2,
-                     Framebuffer::MakeColor(80, 70, 60), 1);
+            const int h2y = iy + 5 * kSS + S(4);
+            DrawText(fb, ix + S(1), h2y + S(1), hint2, kShadow, kSub);
+            DrawText(fb, ix,        h2y,        hint2,
+                     Framebuffer::MakeColor(140, 120, 90), kSub);
         }
     }
 
-    const int backY  = startY + kSettingsItems * step + 8;
+    const int backY   = startY + kSettingsItems * step + S(8);
     const bool backSel = (m_selectedIndex == kSettingsItems);
     const char* backText = "BACK";
     const int bx = cx - TextWidth(backText, kSS) / 2;
-    if (backSel) DrawText(fb, bx - 4*kSS, backY, ">", kSel, kSS);
-    DrawText(fb, bx+1, backY+1, backText, kShadow, kSS);
-    DrawText(fb, bx,   backY,   backText, backSel ? kSel : kNormal, kSS);
+    if (backSel) DrawText(fb, bx - 4 * kSS, backY, ">", kSel, kSS);
+    DrawText(fb, bx + S(1), backY + S(1), backText, kShadow, kSS);
+    DrawText(fb, bx,        backY,        backText, backSel ? kSel : kNormal, kSS);
 
-    const char* hint = "ENTER  TOGGLE   ESC  BACK";
-    DrawText(fb, cx - TextWidth(hint,1)/2, H-16, hint,
-             Framebuffer::MakeColor(60,50,50), 1);
+    const char* hint = (m_selectedIndex == 4)             ? "ENTER  CYCLE   ESC  BACK"
+                     : (m_selectedIndex == kSettingsItems) ? "ENTER  SELECT   ESC  BACK"
+                     :                                       "ENTER  TOGGLE   ESC  BACK";
+    const int footerY = H - 5 * kSub - S(8);
+    DrawText(fb, cx - TextWidth(hint, kSub) / 2 + S(1), footerY + S(1),
+             hint, kShadow, kSub);
+    DrawText(fb, cx - TextWidth(hint, kSub) / 2, footerY,
+             hint, Framebuffer::MakeColor(100, 86, 70), kSub);
 }
