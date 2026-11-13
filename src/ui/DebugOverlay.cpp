@@ -74,50 +74,61 @@ void DebugOverlay::Draw(Framebuffer& framebuffer, float framesPerSecond,
     char line[64];
     const uint32_t textColor = Framebuffer::MakeColor(220, 240, 220);
 
-    framebuffer.DrawRect(8, 8, 300, 84, Framebuffer::MakeColor(12, 16, 18), true);
+    // Scale all coordinates relative to reference width 640.
+    const float sf = static_cast<float>(framebuffer.Width()) / 640.0f;
+    const auto S = [&](int v) { return std::max(1, static_cast<int>(v * sf)); };
+
+    framebuffer.DrawRect(S(8), S(8), S(300), S(84), Framebuffer::MakeColor(12, 16, 18), true);
 
     std::snprintf(line, sizeof(line), "FPS: %.1f", framesPerSecond);
-    DrawText(framebuffer, 14, 14, line, textColor);
+    DrawText(framebuffer, S(14), S(14), line, textColor);
 
     std::snprintf(line, sizeof(line), "POS: %.2f %.2f %.2f",
                   playerPosition.x, playerPosition.y, playerPosition.z);
-    DrawText(framebuffer, 14, 28, line, textColor);
+    DrawText(framebuffer, S(14), S(28), line, textColor);
 
     const float angleDegrees = playerAngleRadians * 180.0f / std::numbers::pi_v<float>;
     std::snprintf(line, sizeof(line), "ANGLE: %.1f", angleDegrees);
-    DrawText(framebuffer, 14, 42, line, textColor);
+    DrawText(framebuffer, S(14), S(42), line, textColor);
 
     std::snprintf(line, sizeof(line), "HEALTH: %d", health);
-    DrawText(framebuffer, 14, 56, line, textColor);
+    DrawText(framebuffer, S(14), S(56), line, textColor);
 
     std::snprintf(line, sizeof(line), "SECTORS: %d WALLS: %d", sectorCount, wallCount);
-    DrawText(framebuffer, 14, 70, line, textColor);
+    DrawText(framebuffer, S(14), S(70), line, textColor);
 }
 
 void DebugOverlay::DrawRestartPrompt(Framebuffer& framebuffer) const {
-    constexpr int kPanelWidth = 144;
-    constexpr int kPanelHeight = 34;
-    const int x = framebuffer.Width() / 2 - kPanelWidth / 2;
+    const float sf = static_cast<float>(framebuffer.Width()) / 640.0f;
+    const auto S = [&](int v) { return std::max(1, static_cast<int>(v * sf)); };
+
+    const int kPanelWidth  = S(144);
+    const int kPanelHeight = S(34);
+    const int x = framebuffer.Width()  / 2 - kPanelWidth  / 2;
     const int y = framebuffer.Height() / 2 - kPanelHeight / 2;
 
     framebuffer.DrawRect(x, y, kPanelWidth, kPanelHeight,
                          Framebuffer::MakeColor(26, 12, 14), true);
-    DrawText(framebuffer, x + 16, y + 12, "PRESS R", Framebuffer::MakeColor(255, 208, 100));
+    DrawText(framebuffer, x + S(16), y + S(12), "PRESS R",
+             Framebuffer::MakeColor(255, 208, 100));
 }
 
 void DebugOverlay::DrawLevelComplete(Framebuffer& framebuffer) const {
-    constexpr int kPanelWidth = 160;
-    constexpr int kPanelHeight = 48;
-    const int x = framebuffer.Width() / 2 - kPanelWidth / 2;
+    const float sf = static_cast<float>(framebuffer.Width()) / 640.0f;
+    const auto S = [&](int v) { return std::max(1, static_cast<int>(v * sf)); };
+
+    const int kPanelWidth  = S(160);
+    const int kPanelHeight = S(48);
+    const int x = framebuffer.Width()  / 2 - kPanelWidth  / 2;
     const int y = framebuffer.Height() / 2 - kPanelHeight / 2;
 
     framebuffer.DrawRect(x, y, kPanelWidth, kPanelHeight,
                          Framebuffer::MakeColor(12, 26, 18), true);
     framebuffer.DrawRect(x, y, kPanelWidth, kPanelHeight,
                          Framebuffer::MakeColor(90, 190, 110), false);
-    DrawText(framebuffer, x + 48, y + 12, "COMPLETE",
+    DrawText(framebuffer, x + S(48), y + S(12), "COMPLETE",
              Framebuffer::MakeColor(170, 255, 180));
-    DrawText(framebuffer, x + 62, y + 28, "ENTER",
+    DrawText(framebuffer, x + S(62), y + S(28), "ENTER",
              Framebuffer::MakeColor(255, 224, 120));
 }
 

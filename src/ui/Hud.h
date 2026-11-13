@@ -20,10 +20,10 @@ public:
 
 private:
     void DrawAmmoCounter(Framebuffer& framebuffer, int x, int y,
-                         int magazineAmmo, int reserveAmmo) const;
+                         int magazineAmmo, int reserveAmmo, float scale) const;
     void DrawKeys(Framebuffer& framebuffer, int x, int y,
-                  const LevelState* levelState) const;
-    void DrawMessageBanner(Framebuffer& framebuffer) const;
+                  const LevelState* levelState, float scale) const;
+    void DrawMessageBanner(Framebuffer& framebuffer, float scale) const;
     void DrawGlyph(Framebuffer& framebuffer, int x, int y,
                    char glyph, uint32_t color, int scale = 2) const;
     void DrawString(Framebuffer& framebuffer, int x, int y,

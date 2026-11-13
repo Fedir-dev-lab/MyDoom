@@ -25,121 +25,131 @@ void Hud::Draw(Framebuffer& framebuffer, int health, int maximumHealth,
                int activeWeaponIndex,
                const char* weaponName,
                const LevelState* levelState) const {
-    const int width = framebuffer.Width();
-    const int height = framebuffer.Height();
-    const uint32_t outlineColor = Framebuffer::MakeColor(18, 18, 18);
-    const uint32_t emptyColor = Framebuffer::MakeColor(82, 22, 22);
-    const uint32_t healthColor = Framebuffer::MakeColor(198, 48, 42);
-    const uint32_t crosshairColor = Framebuffer::MakeColor(238, 238, 220);
+    const int W = framebuffer.Width();
+    const int H = framebuffer.Height();
 
-    constexpr int kBarWidth = 180;
-    constexpr int kBarHeight = 16;
-    const int barX = 16;
-    const int barY = height - kBarHeight - 16;
-    const int filledWidth = std::clamp(health, 0, maximumHealth) * (kBarWidth - 4) / maximumHealth;
+    // UI scale relative to the reference render width (640). At 320 → 0.5×,
+    // at 640 → 1×, at 1280 → 2×. All pixel coordinates multiply by S so the
+    // UI occupies the same screen-fraction at every resolution.
+    const float Sf = static_cast<float>(W) / 640.0f;
+    // Integer scale — round down but keep at least 1 so nothing vanishes.
+    const auto S = [&](int v) { return std::max(1, static_cast<int>(v * Sf)); };
 
-    framebuffer.DrawRect(barX - 2, barY - 2, kBarWidth + 4, kBarHeight + 4, outlineColor, true);
-    framebuffer.DrawRect(barX, barY, kBarWidth, kBarHeight, emptyColor, true);
-    framebuffer.DrawRect(barX + 2, barY + 2, filledWidth, kBarHeight - 4, healthColor, true);
+    const uint32_t outlineColor  = Framebuffer::MakeColor(18,  18,  18);
+    const uint32_t emptyColor    = Framebuffer::MakeColor(82,  22,  22);
+    const uint32_t healthColor   = Framebuffer::MakeColor(198, 48,  42);
+    const uint32_t crosshairColor= Framebuffer::MakeColor(238, 238, 220);
 
-    DrawAmmoCounter(framebuffer, width - 100, height - 34, magazineAmmo, reserveAmmo);
+    // ---- Health bar -------------------------------------------------------
+    const int kBarW  = S(180);
+    const int kBarH  = S(16);
+    const int barX   = S(16);
+    const int barY   = H - kBarH - S(16);
+    const int filled = std::clamp(health, 0, maximumHealth) * (kBarW - S(4)) / maximumHealth;
+
+    framebuffer.DrawRect(barX - S(2), barY - S(2), kBarW + S(4), kBarH + S(4), outlineColor, true);
+    framebuffer.DrawRect(barX, barY, kBarW, kBarH, emptyColor, true);
+    framebuffer.DrawRect(barX + S(2), barY + S(2), filled, kBarH - S(4), healthColor, true);
+
+    // ---- Ammo + weapon name -----------------------------------------------
+    DrawAmmoCounter(framebuffer, W - S(100), H - S(34), magazineAmmo, reserveAmmo, Sf);
 
     if (weaponName) {
-        DrawString(framebuffer, width - 100, height - 52, weaponName, Framebuffer::MakeColor(120, 190, 255), 2);
+        DrawString(framebuffer, W - S(100), H - S(52), weaponName,
+                   Framebuffer::MakeColor(120, 190, 255), std::max(1, static_cast<int>(2 * Sf)));
     }
 
-    const int centerX = width / 2;
-    const int centerY = height / 2;
-    framebuffer.DrawLine(centerX - 8, centerY, centerX - 3, centerY, crosshairColor);
-    framebuffer.DrawLine(centerX + 3, centerY, centerX + 8, centerY, crosshairColor);
-    framebuffer.DrawLine(centerX, centerY - 8, centerX, centerY - 3, crosshairColor);
-    framebuffer.DrawLine(centerX, centerY + 3, centerX, centerY + 8, crosshairColor);
+    // ---- Crosshair --------------------------------------------------------
+    const int cx = W / 2;
+    const int cy = H / 2;
+    const int ch = S(8);  // arm length
+    const int cg = S(3);  // gap
+    framebuffer.DrawLine(cx - ch, cy, cx - cg, cy, crosshairColor);
+    framebuffer.DrawLine(cx + cg, cy, cx + ch, cy, crosshairColor);
+    framebuffer.DrawLine(cx, cy - ch, cx, cy - cg, crosshairColor);
+    framebuffer.DrawLine(cx, cy + cg, cx, cy + ch, crosshairColor);
 
-    const uint32_t gunDarkColor = Framebuffer::MakeColor(46, 50, 56);
-    const uint32_t gunLightColor = Framebuffer::MakeColor(94, 100, 110);
-    const uint32_t woodColor = Framebuffer::MakeColor(120, 72, 40);
+    // ---- Weapon sprite ----------------------------------------------------
+    const uint32_t gunDark  = Framebuffer::MakeColor(46,  50,  56);
+    const uint32_t gunLight = Framebuffer::MakeColor(94,  100, 110);
+    const uint32_t wood     = Framebuffer::MakeColor(120, 72,  40);
 
     if (activeWeaponIndex == 1) {
-        // Shotgun: double barrels with wood pump
-        const int gunWidth = 140;
-        const int gunHeight = 52;
-        const int gunX = centerX - gunWidth / 2;
-        const int gunY = height - gunHeight;
-        framebuffer.DrawRect(gunX + 15, gunY + 20, gunWidth - 30, gunHeight - 20, gunDarkColor, true);
-        framebuffer.DrawRect(centerX - 24, gunY + 14, 48, 16, woodColor, true);
-        framebuffer.DrawRect(centerX - 24, gunY + 18, 48, 2, Framebuffer::MakeColor(70, 40, 20), true);
-        framebuffer.DrawRect(centerX - 18, gunY - 14, 16, 30, gunLightColor, true);
-        framebuffer.DrawRect(centerX + 2,  gunY - 14, 16, 30, gunLightColor, true);
-        framebuffer.DrawRect(centerX - 14, gunY - 18, 8, 6, Framebuffer::MakeColor(30, 30, 30), true);
-        framebuffer.DrawRect(centerX + 6,  gunY - 18, 8, 6, Framebuffer::MakeColor(30, 30, 30), true);
-
+        const int gW = S(140), gH = S(52);
+        const int gX = cx - gW / 2;
+        const int gY = H - gH;
+        framebuffer.DrawRect(gX + S(15), gY + S(20), gW - S(30), gH - S(20), gunDark, true);
+        framebuffer.DrawRect(cx - S(24), gY + S(14), S(48), S(16), wood, true);
+        framebuffer.DrawRect(cx - S(24), gY + S(18), S(48), S(2),  Framebuffer::MakeColor(70,40,20), true);
+        framebuffer.DrawRect(cx - S(18), gY - S(14), S(16), S(30), gunLight, true);
+        framebuffer.DrawRect(cx + S(2),  gY - S(14), S(16), S(30), gunLight, true);
+        framebuffer.DrawRect(cx - S(14), gY - S(18), S(8),  S(6),  Framebuffer::MakeColor(30,30,30), true);
+        framebuffer.DrawRect(cx + S(6),  gY - S(18), S(8),  S(6),  Framebuffer::MakeColor(30,30,30), true);
         if (weaponFiring) {
-            const uint32_t flashColor = Framebuffer::MakeColor(255, 220, 90);
-            const uint32_t flashCore = Framebuffer::MakeColor(255, 255, 200);
-            framebuffer.DrawLine(centerX - 28, gunY - 20, centerX - 10, gunY - 55, flashColor);
-            framebuffer.DrawLine(centerX + 28, gunY - 20, centerX + 10, gunY - 55, flashColor);
-            framebuffer.DrawLine(centerX - 10, gunY - 22, centerX - 10, gunY - 60, flashCore);
-            framebuffer.DrawLine(centerX + 10, gunY - 22, centerX + 10, gunY - 60, flashCore);
-            framebuffer.DrawLine(centerX - 35, gunY - 35, centerX + 35, gunY - 35, flashColor);
+            const uint32_t fl = Framebuffer::MakeColor(255, 220, 90);
+            const uint32_t fc = Framebuffer::MakeColor(255, 255, 200);
+            framebuffer.DrawLine(cx-S(28), gY-S(20), cx-S(10), gY-S(55), fl);
+            framebuffer.DrawLine(cx+S(28), gY-S(20), cx+S(10), gY-S(55), fl);
+            framebuffer.DrawLine(cx-S(10), gY-S(22), cx-S(10), gY-S(60), fc);
+            framebuffer.DrawLine(cx+S(10), gY-S(22), cx+S(10), gY-S(60), fc);
+            framebuffer.DrawLine(cx-S(35), gY-S(35), cx+S(35), gY-S(35), fl);
         }
     } else if (activeWeaponIndex == 2) {
-        // Chaingun: rotating multibarrel
-        const int gunWidth = 120;
-        const int gunHeight = 50;
-        const int gunX = centerX - gunWidth / 2;
-        const int gunY = height - gunHeight;
-        framebuffer.DrawRect(gunX + 10, gunY + 18, gunWidth - 20, gunHeight - 18, gunDarkColor, true);
-        framebuffer.DrawRect(gunX + 8, gunY + 22, 18, 14, Framebuffer::MakeColor(210, 180, 50), true);
-        framebuffer.DrawRect(centerX - 20, gunY - 6, 40, 26, gunLightColor, true);
-        framebuffer.DrawRect(centerX - 14, gunY - 22, 8, 18, Framebuffer::MakeColor(35, 38, 42), true);
-        framebuffer.DrawRect(centerX + 6,  gunY - 22, 8, 18, Framebuffer::MakeColor(35, 38, 42), true);
-        framebuffer.DrawRect(centerX - 4,  gunY - 26, 8, 22, Framebuffer::MakeColor(25, 28, 32), true);
-
+        const int gW = S(120), gH = S(50);
+        const int gX = cx - gW / 2;
+        const int gY = H - gH;
+        framebuffer.DrawRect(gX + S(10), gY + S(18), gW - S(20), gH - S(18), gunDark, true);
+        framebuffer.DrawRect(gX + S(8),  gY + S(22), S(18), S(14), Framebuffer::MakeColor(210,180,50), true);
+        framebuffer.DrawRect(cx - S(20), gY - S(6),  S(40), S(26), gunLight, true);
+        framebuffer.DrawRect(cx - S(14), gY - S(22), S(8),  S(18), Framebuffer::MakeColor(35,38,42), true);
+        framebuffer.DrawRect(cx + S(6),  gY - S(22), S(8),  S(18), Framebuffer::MakeColor(35,38,42), true);
+        framebuffer.DrawRect(cx - S(4),  gY - S(26), S(8),  S(22), Framebuffer::MakeColor(25,28,32), true);
         if (weaponFiring) {
-            const uint32_t flashColor = Framebuffer::MakeColor(255, 200, 70);
-            framebuffer.DrawLine(centerX - 14, gunY - 24, centerX - 6, gunY - 52, flashColor);
-            framebuffer.DrawLine(centerX + 14, gunY - 24, centerX + 6, gunY - 52, flashColor);
-            framebuffer.DrawLine(centerX, gunY - 26, centerX, gunY - 56, Framebuffer::MakeColor(255, 255, 180));
+            const uint32_t fl = Framebuffer::MakeColor(255, 200, 70);
+            framebuffer.DrawLine(cx-S(14), gY-S(24), cx-S(6), gY-S(52), fl);
+            framebuffer.DrawLine(cx+S(14), gY-S(24), cx+S(6), gY-S(52), fl);
+            framebuffer.DrawLine(cx, gY-S(26), cx, gY-S(56), Framebuffer::MakeColor(255,255,180));
         }
     } else {
-        // Pistol: compact slide
-        const int gunWidth = 110;
-        const int gunHeight = 48;
-        const int gunX = centerX - gunWidth / 2;
-        const int gunY = height - gunHeight;
-        framebuffer.DrawRect(gunX, gunY + 16, gunWidth, gunHeight - 16, gunDarkColor, true);
-        framebuffer.DrawRect(centerX - 16, gunY, 32, 28, gunLightColor, true);
-        framebuffer.DrawRect(centerX - 8, gunY - 16, 16, 20, gunLightColor, true);
-
+        const int gW = S(110), gH = S(48);
+        const int gX = cx - gW / 2;
+        const int gY = H - gH;
+        framebuffer.DrawRect(gX,        gY + S(16), gW,     gH - S(16), gunDark,  true);
+        framebuffer.DrawRect(cx - S(16), gY,         S(32),  S(28),      gunLight, true);
+        framebuffer.DrawRect(cx - S(8),  gY - S(16), S(16),  S(20),      gunLight, true);
         if (weaponFiring) {
-            const uint32_t flashColor = Framebuffer::MakeColor(255, 218, 96);
-            framebuffer.DrawLine(centerX - 16, gunY - 42, centerX, gunY - 16, flashColor);
-            framebuffer.DrawLine(centerX + 16, gunY - 42, centerX, gunY - 16, flashColor);
-            framebuffer.DrawLine(centerX, gunY - 48, centerX, gunY - 18, flashColor);
+            const uint32_t fl = Framebuffer::MakeColor(255, 218, 96);
+            framebuffer.DrawLine(cx-S(16), gY-S(42), cx, gY-S(16), fl);
+            framebuffer.DrawLine(cx+S(16), gY-S(42), cx, gY-S(16), fl);
+            framebuffer.DrawLine(cx,       gY-S(48), cx, gY-S(18), fl);
         }
     }
 
+    // ---- Reload bar -------------------------------------------------------
     if (weaponReloading) {
-        const uint32_t reloadColor = Framebuffer::MakeColor(244, 182, 62);
-        framebuffer.DrawRect(centerX - 34, height - 64, 68, 5, reloadColor, true);
+        framebuffer.DrawRect(cx - S(34), H - S(64), S(68), S(5),
+                             Framebuffer::MakeColor(244, 182, 62), true);
     }
 
-    DrawKeys(framebuffer, barX, barY - 20, levelState);
-    DrawMessageBanner(framebuffer);
+    // ---- Keys + message ---------------------------------------------------
+    DrawKeys(framebuffer, barX, barY - S(20), levelState, Sf);
+    DrawMessageBanner(framebuffer, Sf);
 }
 
 void Hud::DrawAmmoCounter(Framebuffer& framebuffer, int x, int y,
-                          int magazineAmmo, int reserveAmmo) const {
+                          int magazineAmmo, int reserveAmmo, float scale) const {
     const std::string text = std::to_string(magazineAmmo) + "/" + std::to_string(reserveAmmo);
     const uint32_t color = Framebuffer::MakeColor(102, 180, 250);
-
+    const int glyphScale = std::max(1, static_cast<int>(2 * scale));
+    const int advance    = 3 * glyphScale + glyphScale; // glyph width + gap
     for (size_t i = 0; i < text.size(); ++i) {
-        DrawGlyph(framebuffer, x + static_cast<int>(i) * 10, y, text[i], color);
+        DrawGlyph(framebuffer, x + static_cast<int>(i) * advance, y,
+                  text[i], color, glyphScale);
     }
 }
 
 void Hud::DrawKeys(Framebuffer& framebuffer, int x, int y,
-                   const LevelState* levelState) const {
+                   const LevelState* levelState, float scale) const {
     if (!levelState) { return; }
 
     struct KeyBadge {
@@ -162,9 +172,11 @@ void Hud::DrawKeys(Framebuffer& framebuffer, int x, int y,
                                  Framebuffer::MakeColor(20, 20, 20)},
     };
 
-    constexpr int kBadgeW = 14;
-    constexpr int kBadgeH = 16;
-    constexpr int kSpacing = 4;
+    const auto S = [&](int v) { return std::max(1, static_cast<int>(v * scale)); };
+    const int kBadgeW = S(14);
+    const int kBadgeH = S(16);
+    const int kSpacing = S(4);
+    const int glyphScale = std::max(1, static_cast<int>(2 * scale));
 
     for (int i = 0; i < 3; ++i) {
         const int bx = x + i * (kBadgeW + kSpacing);
@@ -172,33 +184,34 @@ void Hud::DrawKeys(Framebuffer& framebuffer, int x, int y,
         const uint32_t bg = owned ? badges[i].activeColor : badges[i].dimColor;
         const uint32_t fg = owned ? badges[i].textColor : Framebuffer::MakeColor(70, 70, 70);
 
-        framebuffer.DrawRect(bx - 1, y - 1, kBadgeW + 2, kBadgeH + 2,
+        framebuffer.DrawRect(bx - S(1), y - S(1), kBadgeW + S(2), kBadgeH + S(2),
                              Framebuffer::MakeColor(18, 18, 18), true);
         framebuffer.DrawRect(bx, y, kBadgeW, kBadgeH, bg, true);
-        DrawGlyph(framebuffer, bx + 4, y + 3, badges[i].letter, fg, 2);
+        DrawGlyph(framebuffer, bx + S(4), y + S(3), badges[i].letter, fg, glyphScale);
     }
 }
 
-void Hud::DrawMessageBanner(Framebuffer& framebuffer) const {
+void Hud::DrawMessageBanner(Framebuffer& framebuffer, float scale) const {
     if (m_messageTimer <= 0.0f || m_message.empty()) { return; }
 
-    constexpr int kScale = 2;
-    constexpr int kCharWidth = 3 * kScale + kScale; // 8 px
-    const int textWidth = static_cast<int>(m_message.size()) * kCharWidth - kScale;
-    const int textX = std::max(8, (framebuffer.Width() - textWidth) / 2);
-    constexpr int textY = 28;
+    const int kScale = std::max(1, static_cast<int>(2 * scale));
+    const int kCharWidth = 3 * kScale + kScale;
+    const int textWidth  = static_cast<int>(m_message.size()) * kCharWidth - kScale;
+    const int textX      = std::max(8, (framebuffer.Width() - textWidth) / 2);
+    const int textY      = static_cast<int>(28 * scale);
 
-    const int padX = 8;
-    const int padY = 4;
+    const int padX = static_cast<int>(8 * scale);
+    const int padY = static_cast<int>(4 * scale);
     const int boxX = textX - padX;
     const int boxY = textY - padY;
     const int boxW = textWidth + padX * 2;
     const int boxH = 5 * kScale + padY * 2;
 
     framebuffer.DrawRect(boxX, boxY, boxW, boxH, Framebuffer::MakeColor(18, 18, 22), true);
-    framebuffer.DrawRect(boxX - 1, boxY - 1, boxW + 2, boxH + 2, Framebuffer::MakeColor(120, 110, 95), false);
-
-    DrawString(framebuffer, textX, textY, m_message, Framebuffer::MakeColor(255, 224, 70), kScale);
+    framebuffer.DrawRect(boxX - 1, boxY - 1, boxW + 2, boxH + 2,
+                         Framebuffer::MakeColor(120, 110, 95), false);
+    DrawString(framebuffer, textX, textY, m_message,
+               Framebuffer::MakeColor(255, 224, 70), kScale);
 }
 
 void Hud::DrawString(Framebuffer& framebuffer, int x, int y,
