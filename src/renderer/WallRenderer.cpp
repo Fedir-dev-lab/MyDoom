@@ -257,19 +257,19 @@ void WallRenderer::DrawWall(Framebuffer& framebuffer, const Camera& camera,
         drawTexFace(wv, uvs);
     }
 
-    // Left cap (start side): F0→B0→B3→F3
-    // Map texture vertically (thickness is horizontal)
+    // Left cap (start side) — CCW from outside: F0, F3, B3, B0
+    // Normal points toward start (away from wall) — verified by cross product.
     {
-        const std::vector<Vector3> wv = { F0, B0, B3, F3 };
-        const float uvs[8] = { 0.f,1.f,  1.f,1.f,  1.f,0.f,  0.f,0.f };
+        const std::vector<Vector3> wv = { F0, F3, B3, B0 };
+        const float uvs[8] = { 0.f,1.f,  0.f,0.f,  1.f,0.f,  1.f,1.f };
         drawTexFace(wv, uvs);
     }
 
-    // Right cap (end side): B1→F1→F2→B2
-    // Map texture vertically
+    // Right cap (end side) — CCW from outside: B1, B2, F2, F1
+    // Normal points toward end (away from wall) — verified by cross product.
     {
-        const std::vector<Vector3> wv = { B1, F1, F2, B2 };
-        const float uvs[8] = { 0.f,1.f,  1.f,1.f,  1.f,0.f,  0.f,0.f };
+        const std::vector<Vector3> wv = { B1, B2, F2, F1 };
+        const float uvs[8] = { 0.f,1.f,  0.f,0.f,  1.f,0.f,  1.f,1.f };
         drawTexFace(wv, uvs);
     }
 }
