@@ -8,8 +8,8 @@ vertex 0 -6.0 -6.0
 vertex 0  6.0 -6.0
 vertex 0  6.0  6.0
 vertex 0 -6.0  6.0
-wall 0 -6.0  6.0 -1.0  6.0 default default block
-wall 0  1.0  6.0  6.0  6.0 default default block
+# Z=6 walls are defined by sector 1 (taller, ceiling 3.0) to avoid z-fighting.
+# Only the upper doorway pass-wall is unique to sector 0.
 wall 0 -1.0  6.0  1.0  6.0 2.0 3.0 pass
 wall 0  6.0  6.0  6.0 -6.0 default default block
 wall 0  6.0 -6.0 -6.0 -6.0 default default block
