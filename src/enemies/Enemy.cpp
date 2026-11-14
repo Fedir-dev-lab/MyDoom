@@ -158,7 +158,25 @@ void Enemy::Update(float deltaSeconds, Player& player, const Map& map,
         case EnemyState::Chase: {
             if (distance > 26.0f) {
                 m_state = EnemyState::Idle;
+                m_lostSightTimer = 0.0f;
                 return;
+            }
+
+            // Re-check line of sight: if a wall or closed door blocks vision,
+            // start a lost-sight timer.  After 3 seconds without LoS the enemy
+            // gives up and returns to Idle instead of pressing against the
+            // wall forever (so opening a door later doesn't release a camping
+            // monster that has been waiting right behind it).
+            if (hasLoS) {
+                m_lostSightTimer = 0.0f;
+            } else {
+                m_lostSightTimer += deltaSeconds;
+                if (m_lostSightTimer >= 3.0f) {
+                    m_state = EnemyState::Idle;
+                    m_lostSightTimer = 0.0f;
+                    m_patrolTimer = 0.0f;
+                    return;
+                }
             }
 
             if (m_type == EnemyType::MantisScout) {
@@ -290,4 +308,5 @@ void Enemy::Reset() {
     m_hurtTimer = 0.0f;
     m_stateTimer = 0.0f;
     m_patrolTimer = 0.0f;
+    m_lostSightTimer = 0.0f;
 }
