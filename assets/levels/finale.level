@@ -14,8 +14,8 @@ vertex 0 -6.0  6.0
 wall 0 -6.0 -6.0  6.0 -6.0 default default block
 wall 0  6.0 -6.0  6.0  6.0 default default block
 wall 0 -6.0  6.0 -6.0 -6.0 default default block
-wall 0 -6.0  6.0 -1.5  6.0 default default block
-wall 0  1.5  6.0  6.0  6.0 default default block
+# Z=6 walls are defined by sector 1 (wider, taller) to avoid z-fighting.
+# Only the upper doorway pass-wall is unique to sector 0.
 wall 0 -1.5  6.0  1.5  6.0 2.5 3.5 pass
 
 # ---------------------------------------------------------------------------
@@ -30,8 +30,7 @@ wall 1 -8.0  6.0 -1.5  6.0 default default block
 wall 1  1.5  6.0  8.0  6.0 default default block
 wall 1  8.0  6.0  8.0 22.0 default default block
 wall 1 -8.0 22.0 -8.0  6.0 default default block
-wall 1 -8.0 22.0 -2.0 22.0 default default block
-wall 1  2.0 22.0  8.0 22.0 default default block
+# Z=22 walls are defined by sector 2 (wider) to avoid z-fighting.
 
 # ---------------------------------------------------------------------------
 # Sector 2: The Arena Sanctum (Open sky boss arena)

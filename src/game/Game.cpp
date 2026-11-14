@@ -7,8 +7,6 @@
 #include <filesystem>
 #include <memory>
 #include <string>
-#include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 #include "game/Game.h"
@@ -888,53 +886,6 @@ static void Render(AppState& app) {
     static const std::vector<PointLight> kNoLights;
     const std::vector<PointLight>& activeLights = shadowsOn ? lights : kNoLights;
 
-    // Deduplicate shared walls between adjacent sectors.  Two sectors that
-    // share an edge both define a wall at the same coordinates; without
-    // deduplication each renders a volumetric box at the same spot, causing
-    // z-fighting.  We match by position only (not height, since adjacent
-    // sectors can have different ceiling heights) and render each unique
-    // wall once using the maximum height range, so the shorter sector's
-    // ceiling z-buffers the extra height.
-    struct PosKey {
-        float a, b, c, d;
-        bool operator==(const PosKey& o) const {
-            return a == o.a && b == o.b && c == o.c && d == o.d;
-        }
-    };
-    struct PosKeyHash {
-        size_t operator()(const PosKey& k) const {
-            auto h = std::hash<float>{}(k.a);
-            h ^= std::hash<float>{}(k.b) + 0x9e3779b9 + (h << 6) + (h >> 2);
-            h ^= std::hash<float>{}(k.c) + 0x9e3779b9 + (h << 6) + (h >> 2);
-            h ^= std::hash<float>{}(k.d) + 0x9e3779b9 + (h << 6) + (h >> 2);
-            return h;
-        }
-    };
-
-    // Pre-scan: for each unique wall position, find the widest height span.
-    std::unordered_map<PosKey, std::pair<float,float>, PosKeyHash> wallHeights;
-    for (const Sector& sector : app.map.Sectors()) {
-        for (const Wall& wall : sector.walls) {
-            const float bot = wall.bottomHeight.value_or(sector.floorHeight);
-            const float top = wall.topHeight.value_or(sector.ceilingHeight.value_or(3.0f));
-            const float sx = wall.start.x, sz = wall.start.z;
-            const float ex = wall.end.x,   ez = wall.end.z;
-            PosKey key = (sx < ex || (sx == ex && sz <= ez))
-                ? PosKey{ sx, sz, ex, ez }
-                : PosKey{ ex, ez, sx, sz };
-            auto it = wallHeights.find(key);
-            if (it == wallHeights.end()) {
-                wallHeights[key] = { bot, top };
-            } else {
-                it->second.first  = std::min(it->second.first,  bot);
-                it->second.second = std::max(it->second.second, top);
-            }
-        }
-    }
-
-    // Render each wall once, using the pre-computed max height.
-    std::unordered_set<PosKey, PosKeyHash> drawnWalls;
-
     for (const Sector& sector : app.map.Sectors()) {
         const Texture& floorTex =
             sector.floorMaterial == 0 ? app.assets.GetTexture(TextureId::FirstFloor) :
@@ -958,19 +909,10 @@ static void Render(AppState& app) {
         }
         if (!isMarsSurface) {
             for (const Wall& wall : sector.walls) {
-                // Canonical position key (endpoints sorted).
-                const float sx = wall.start.x, sz = wall.start.z;
-                const float ex = wall.end.x,   ez = wall.end.z;
-                PosKey key = (sx < ex || (sx == ex && sz <= ez))
-                    ? PosKey{ sx, sz, ex, ez }
-                    : PosKey{ ex, ez, sx, sz };
-                if (!drawnWalls.insert(key).second) continue;  // already drawn
-
-                // Use the widest height span across all sectors sharing this wall.
-                const auto& ht = wallHeights[key];
                 rc.wallRenderer.DrawWall(fb, cam,
                     wall.start, wall.end,
-                    ht.first, ht.second,
+                    wall.bottomHeight.value_or(sector.floorHeight),
+                    wall.topHeight.value_or(sector.ceilingHeight.value_or(3.0f)),
                     activeLights, amb, secSun,
                     app.assets.GetTexture(TextureId::Wall));
             }
