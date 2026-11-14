@@ -88,5 +88,7 @@ private:
     float m_stateTimer = 0.0f;
     float m_patrolTimer = 0.0f;
     float m_lostSightTimer = 0.0f;
+    float m_repathTimer = 0.0f;
+    std::vector<Vector3> m_path;
     int   m_patrolDirection = 1;
 };

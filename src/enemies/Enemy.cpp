@@ -6,6 +6,7 @@
 #include "player/Player.h"
 #include "world/Map.h"
 #include "world/LevelState.h"
+#include "world/Pathfinder.h"
 
 Enemy::Enemy(Vector3 position, EnemyType type)
     : m_spawnPosition(position), m_position(position), m_type(type) {
@@ -159,6 +160,7 @@ void Enemy::Update(float deltaSeconds, Player& player, const Map& map,
             if (distance > 26.0f) {
                 m_state = EnemyState::Idle;
                 m_lostSightTimer = 0.0f;
+                m_path.clear();
                 return;
             }
 
@@ -175,6 +177,7 @@ void Enemy::Update(float deltaSeconds, Player& player, const Map& map,
                     m_state = EnemyState::Idle;
                     m_lostSightTimer = 0.0f;
                     m_patrolTimer = 0.0f;
+                    m_path.clear();
                     return;
                 }
             }
@@ -225,8 +228,47 @@ void Enemy::Update(float deltaSeconds, Player& player, const Map& map,
                 }
             }
 
-            // Normal chase movement
-            Vector3 moveDir = toPlayer.Normalized();
+            // --- Movement direction ----------------------------------------
+            // When the enemy has direct line-of-sight, move straight toward
+            // the player.  When LoS is blocked (around a corner, through a
+            // closed door), use A* pathfinding to navigate around obstacles.
+            Vector3 moveDir;
+
+            if (hasLoS) {
+                // Direct pursuit — no path needed.
+                m_path.clear();
+                moveDir = toPlayer.Normalized();
+            } else {
+                // No LoS: recompute A* path periodically.
+                m_repathTimer -= deltaSeconds;
+                if (m_repathTimer <= 0.0f || m_path.empty()) {
+                    m_repathTimer = 0.5f;
+                    Pathfinder pf(map, levelState, m_radius);
+                    m_path = pf.FindPath(m_position, playerPosition);
+                }
+
+                if (!m_path.empty()) {
+                    // Follow waypoints: move toward the first one, drop it
+                    // when close enough and advance to the next.
+                    Vector3 toWaypoint = m_path.front() - m_position;
+                    toWaypoint.y = 0.0f;
+                    if (toWaypoint.Length() < 0.6f) {
+                        m_path.erase(m_path.begin());
+                        if (!m_path.empty()) {
+                            toWaypoint = m_path.front() - m_position;
+                            toWaypoint.y = 0.0f;
+                        }
+                    }
+                    if (toWaypoint.LengthSquared() > 0.001f) {
+                        moveDir = toWaypoint.Normalized();
+                    } else {
+                        moveDir = toPlayer.Normalized();
+                    }
+                } else {
+                    // No path found: fall back to direct movement.
+                    moveDir = toPlayer.Normalized();
+                }
+            }
 
             // Separation from other active enemies
             Vector3 separation{0.0f, 0.0f, 0.0f};
@@ -309,4 +351,6 @@ void Enemy::Reset() {
     m_stateTimer = 0.0f;
     m_patrolTimer = 0.0f;
     m_lostSightTimer = 0.0f;
+    m_repathTimer = 0.0f;
+    m_path.clear();
 }
