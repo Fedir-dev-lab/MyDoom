@@ -158,7 +158,24 @@ void Enemy::Update(float deltaSeconds, Player& player, const Map& map,
         case EnemyState::Chase: {
             if (distance > 26.0f) {
                 m_state = EnemyState::Idle;
+                m_lostSightTimer = 0.0f;
                 return;
+            }
+
+            // Re-check line of sight: if the enemy can't see the player
+            // (e.g. a wall or closed door is between them), start a lost-sight
+            // timer.  After a few seconds without LoS, give up and return to
+            // Idle instead of pressing against the wall indefinitely.
+            if (hasLoS) {
+                m_lostSightTimer = 0.0f;
+            } else {
+                m_lostSightTimer += deltaSeconds;
+                if (m_lostSightTimer >= 3.0f) {
+                    m_state = EnemyState::Idle;
+                    m_lostSightTimer = 0.0f;
+                    m_patrolTimer = 0.0f;
+                    return;
+                }
             }
 
             if (m_type == EnemyType::MantisScout) {
@@ -290,4 +307,5 @@ void Enemy::Reset() {
     m_hurtTimer = 0.0f;
     m_stateTimer = 0.0f;
     m_patrolTimer = 0.0f;
+    m_lostSightTimer = 0.0f;
 }
