@@ -90,5 +90,7 @@ private:
     float m_lostSightTimer = 0.0f;
     float m_repathTimer = 0.0f;
     std::vector<Vector3> m_path;
+    Vector3 m_patrolTarget{0.0f, 0.0f, 0.0f};
+    bool m_returningToSpawn = false;
     int   m_patrolDirection = 1;
 };

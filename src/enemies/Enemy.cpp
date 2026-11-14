@@ -8,6 +8,15 @@
 #include "world/LevelState.h"
 #include "world/Pathfinder.h"
 
+namespace {
+// Simple LCG for picking random patrol directions.
+float RandomFloat(float min, float max) {
+    static uint32_t s = 2463534242u;
+    s = s * 1103515245u + 12345u;
+    return min + (static_cast<float>(s) / 4294967296.0f) * (max - min);
+}
+} // namespace
+
 Enemy::Enemy(Vector3 position, EnemyType type)
     : m_spawnPosition(position), m_position(position), m_type(type) {
     ConfigureArchetype();
@@ -83,12 +92,24 @@ void Enemy::Update(float deltaSeconds, Player& player, const Map& map,
             if (hasLoS && distance <= 14.0f) {
                 m_state = EnemyState::Alert;
                 m_stateTimer = 0.35f;
+                m_path.clear();
             } else {
                 m_patrolTimer += deltaSeconds;
                 if (m_patrolTimer >= 4.0f) {
                     m_patrolTimer = 0.0f;
+                    // Pick a random scouting point 5-10m from spawn.
+                    const float angle = RandomFloat(0.0f, 6.283185f);
+                    const float radius = RandomFloat(5.0f, 10.0f);
+                    m_patrolTarget = {
+                        m_spawnPosition.x + std::cos(angle) * radius,
+                        0.0f,
+                        m_spawnPosition.z + std::sin(angle) * radius
+                    };
+                    m_returningToSpawn = false;
+                    m_path.clear();
+                    m_repathTimer = 0.0f;
+                    m_stateTimer = 0.0f;
                     m_state = EnemyState::Patrol;
-                    m_stateTimer = 2.0f;
                 }
             }
             return;
@@ -98,23 +119,75 @@ void Enemy::Update(float deltaSeconds, Player& player, const Map& map,
             if (hasLoS && distance <= 14.0f) {
                 m_state = EnemyState::Alert;
                 m_stateTimer = 0.35f;
+                m_path.clear();
                 return;
             }
-            m_stateTimer -= deltaSeconds;
-            if (m_stateTimer <= 0.0f) {
-                m_patrolDirection = -m_patrolDirection;
-                m_state = EnemyState::Idle;
+
+            // Phase: pause at patrol target to look around.
+            if (!m_returningToSpawn && m_stateTimer > 0.0f) {
+                m_stateTimer -= deltaSeconds;
+                if (m_stateTimer <= 0.0f) {
+                    m_returningToSpawn = true;
+                    m_path.clear();
+                    m_repathTimer = 0.0f;
+                }
                 return;
             }
-            const Vector3 patrolDir{static_cast<float>(m_patrolDirection), 0.0f, 0.0f};
-            const Vector3 step = patrolDir * (m_moveSpeed * 0.4f * deltaSeconds);
-            const Vector3 candidate = m_position + step;
-            if (!map.IsPositionBlocked(candidate, m_radius) &&
-                !map.IsDoorPositionBlocked(candidate, m_radius, levelState)) {
-                m_position = candidate;
-            } else {
-                m_patrolDirection = -m_patrolDirection;
+
+            // Determine destination: patrol target or spawn.
+            const Vector3& dest = m_returningToSpawn ? m_spawnPosition
+                                                     : m_patrolTarget;
+
+            // Compute A* path periodically.
+            m_repathTimer -= deltaSeconds;
+            if (m_repathTimer <= 0.0f || m_path.empty()) {
+                m_repathTimer = 1.0f;
+                Pathfinder pf(map, levelState, m_radius);
+                m_path = pf.FindPath(m_position, dest);
+            }
+
+            if (m_path.empty()) {
+                // No path: give up and return to Idle.
                 m_state = EnemyState::Idle;
+                m_returningToSpawn = false;
+                m_patrolTimer = 0.0f;
+                return;
+            }
+
+            // Follow waypoints at 40% speed.
+            Vector3 toWaypoint = m_path.front() - m_position;
+            toWaypoint.y = 0.0f;
+            const float wpDist = toWaypoint.Length();
+
+            if (wpDist < 0.8f) {
+                m_path.erase(m_path.begin());
+                if (m_path.empty()) {
+                    // Reached destination.
+                    if (!m_returningToSpawn) {
+                        // At patrol target — look around for 1.5s.
+                        m_stateTimer = 1.5f;
+                    } else {
+                        // Back at spawn — go Idle.
+                        m_state = EnemyState::Idle;
+                        m_returningToSpawn = false;
+                        m_patrolTimer = 0.0f;
+                    }
+                    return;
+                }
+                toWaypoint = m_path.front() - m_position;
+                toWaypoint.y = 0.0f;
+            }
+
+            if (toWaypoint.LengthSquared() > 0.001f) {
+                const Vector3 moveDir = toWaypoint.Normalized();
+                const Vector3 step = moveDir * (m_moveSpeed * 0.4f * deltaSeconds);
+                const Vector3 candidate = m_position + step;
+                if (!map.IsPositionBlocked(candidate, m_radius) &&
+                    !map.IsDoorPositionBlocked(candidate, m_radius, levelState)) {
+                    m_position = candidate;
+                } else {
+                    m_path.clear();  // recompute next frame
+                }
             }
             return;
         }
@@ -353,4 +426,5 @@ void Enemy::Reset() {
     m_lostSightTimer = 0.0f;
     m_repathTimer = 0.0f;
     m_path.clear();
+    m_returningToSpawn = false;
 }
