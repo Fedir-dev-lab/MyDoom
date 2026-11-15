@@ -302,45 +302,39 @@ void Enemy::Update(float deltaSeconds, Player& player, const Map& map,
             }
 
             // --- Movement direction ----------------------------------------
-            // When the enemy has direct line-of-sight, move straight toward
-            // the player.  When LoS is blocked (around a corner, through a
-            // closed door), use A* pathfinding to navigate around obstacles.
+            // Always use A* pathfinding to navigate toward the player.
+            // When the direct path is clear, A* returns a straight line so
+            // the enemy still moves directly.  When obstacles block the
+            // way, A* routes around walls and through doors.
             Vector3 moveDir;
 
-            if (hasLoS) {
-                // Direct pursuit — no path needed.
-                m_path.clear();
-                moveDir = toPlayer.Normalized();
-            } else {
-                // No LoS: recompute A* path periodically.
-                m_repathTimer -= deltaSeconds;
-                if (m_repathTimer <= 0.0f || m_path.empty()) {
-                    m_repathTimer = 0.5f;
-                    Pathfinder pf(map, levelState, m_radius);
-                    m_path = pf.FindPath(m_position, playerPosition);
-                }
+            m_repathTimer -= deltaSeconds;
+            if (m_repathTimer <= 0.0f || m_path.empty()) {
+                m_repathTimer = 0.5f;
+                Pathfinder pf(map, levelState, m_radius);
+                m_path = pf.FindPath(m_position, playerPosition);
+            }
 
-                if (!m_path.empty()) {
-                    // Follow waypoints: move toward the first one, drop it
-                    // when close enough and advance to the next.
-                    Vector3 toWaypoint = m_path.front() - m_position;
-                    toWaypoint.y = 0.0f;
-                    if (toWaypoint.Length() < 0.6f) {
-                        m_path.erase(m_path.begin());
-                        if (!m_path.empty()) {
-                            toWaypoint = m_path.front() - m_position;
-                            toWaypoint.y = 0.0f;
-                        }
+            if (!m_path.empty()) {
+                // Follow waypoints: move toward the first one, drop it
+                // when close enough and advance to the next.
+                Vector3 toWaypoint = m_path.front() - m_position;
+                toWaypoint.y = 0.0f;
+                if (toWaypoint.Length() < 0.6f) {
+                    m_path.erase(m_path.begin());
+                    if (!m_path.empty()) {
+                        toWaypoint = m_path.front() - m_position;
+                        toWaypoint.y = 0.0f;
                     }
-                    if (toWaypoint.LengthSquared() > 0.001f) {
-                        moveDir = toWaypoint.Normalized();
-                    } else {
-                        moveDir = toPlayer.Normalized();
-                    }
+                }
+                if (toWaypoint.LengthSquared() > 0.001f) {
+                    moveDir = toWaypoint.Normalized();
                 } else {
-                    // No path found: fall back to direct movement.
                     moveDir = toPlayer.Normalized();
                 }
+            } else {
+                // No path found: fall back to direct movement.
+                moveDir = toPlayer.Normalized();
             }
 
             // Separation from other active enemies

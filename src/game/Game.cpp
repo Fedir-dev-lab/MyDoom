@@ -38,6 +38,7 @@
 #include "world/Map.h"
 #include "world/DemoLevel.h"
 #include "world/LevelLoader.h"
+#include "world/OpenWorldManager.h"
 #include "world/LevelState.h"
 
 constexpr int   kScreenWidth  = 1280;
@@ -170,6 +171,8 @@ struct AppState {
     int  pendingLoadSlot = -1;
     bool isLevelTransition = false;
     bool isFullscreen = false;
+    bool isOpenWorld  = false;
+    OpenWorldManager openWorld;
 
 #ifdef DEV_MODE
     DevModeState devMode;
@@ -293,6 +296,47 @@ static void RestoreSaveData(AppState& app, const SaveData& data) {
 // LevelLoader validation. A bad next-level file therefore cannot leave Map in
 // a half-updated state or terminate the process.
 static void LoadRequestedLevel(AppState& app) {
+    // --- Open world: synthetic level, no .level file needed ---
+    if (app.requestedLevelId == "openworld") {
+        app.isOpenWorld = true;
+
+        // Empty LevelData: no sectors, no walls, no Mars terrain.
+        // OpenWorldManager owns all geometry for this level.
+        LevelData owData;
+        owData.marsTerrain = false;
+        app.map = Map(std::move(owData));
+        app.levelState.Reset(app.map.GetLevelData());
+        app.RebuildPhoneWalls();
+        app.enemies.clear();
+        app.projectiles.clear();
+
+        const Vector3 spawn = OpenWorldManager::SpawnPosition();
+        const bool wasTransition = app.isLevelTransition;
+        app.isLevelTransition = false;
+        const int carryHealth = wasTransition
+            ? std::clamp(std::max(app.player.Health(),
+                                  Player::kMaximumHealth * 4 / 10),
+                         1, Player::kMaximumHealth)
+            : Player::kMaximumHealth;
+        app.player.LoadState(spawn, 0.0f, 0.0f, carryHealth);
+        if (!wasTransition) app.weapon.Reset();
+
+        app.phone           = Phone{};
+        app.restartRequested = false;
+        app.sunWorldAngle   = 0.3f;
+        app.sunElevation    = 0.4f;
+        app.currentLevelId  = "openworld";
+        app.requestedLevelId.clear();
+        app.pendingLoad.reset();
+        app.pendingLoadSlot = -1;
+        app.hud.ShowMessage("OPEN WORLD");
+        app.gameState = GameState::Playing;
+
+        // Prime the first chunk load.
+        app.openWorld.Update(spawn.x, spawn.z);
+        return;
+    }
+
     const std::string path = app.assetDirectory + "/levels/" +
                              app.requestedLevelId + ".level";
     std::string error;
@@ -313,6 +357,7 @@ static void LoadRequestedLevel(AppState& app) {
 
     const bool wasTransition = app.isLevelTransition;
     app.isLevelTransition = false;
+    app.isOpenWorld = false;
 
     app.map = Map(std::move(loaded->data));
     app.levelState.Reset(app.map.GetLevelData());
@@ -674,6 +719,11 @@ static void Update(AppState& app, float deltaSeconds) {
                        kb[SDL_SCANCODE_A], kb[SDL_SCANCODE_D], mdx, mdy},
                       deltaSeconds, app.map, app.levelState, app.menu.HeadBobEnabled());
 
+    // Open world chunk streaming.
+    if (app.isOpenWorld) {
+        app.openWorld.Update(app.player.Position().x, app.player.Position().z);
+    }
+
 #ifdef DEV_MODE
     // ---- Developer noclip / flight -------------------------------------
     // F1 toggles noclip. Speed: [ = slower, ] = faster.
@@ -916,6 +966,25 @@ static void Render(AppState& app) {
                     activeLights, amb, secSun,
                     app.assets.GetTexture(TextureId::Wall));
             }
+        }
+    }
+
+    // --- Open world chunk geometry ------------------------------------
+    if (app.isOpenWorld) {
+        const auto& owData = app.openWorld.GetRenderData();
+        const Texture& floorTex = app.assets.GetTexture(TextureId::OutdoorFloor);
+        const Texture& wallTex  = app.assets.GetTexture(TextureId::Wall);
+        for (const Sector& sector : owData.sectors) {
+            rc.planeRenderer.DrawPlane(fb, cam,
+                sector.floorHeight, sector.vertices,
+                activeLights, sector.ambientLight, sunLight, floorTex);
+        }
+        for (const auto& [wall, amb] : owData.walls) {
+            rc.wallRenderer.DrawWall(fb, cam,
+                wall.start, wall.end,
+                wall.bottomHeight.value_or(0.0f),
+                wall.topHeight.value_or(3.0f),
+                activeLights, amb, sunLight, wallTex);
         }
     }
 
