@@ -79,18 +79,44 @@ float ComputeMeshLighting(const Vector3& normal, const Vector3& centroid,
 }
 
 // Scanline fill of a convex polygon with perspective-correct depth.
+// Uses a half-pixel outward expansion of the polygon to close cracks
+// between adjacent faces of the same mesh.
 void FillConvex(Framebuffer& framebuffer, const std::vector<ScreenVertex>& poly,
                 uint32_t color, int screenWidth, int screenHeight) {
     const int n = static_cast<int>(poly.size());
     if (n < 3) { return; }
 
-    float minY = poly[0].y, maxY = poly[0].y;
-    for (int i = 1; i < n; ++i) {
-        if (poly[i].y < minY) { minY = poly[i].y; }
-        if (poly[i].y > maxY) { maxY = poly[i].y; }
+    // Compute polygon centroid in screen space.
+    float cx = 0.f, cy = 0.f;
+    for (const ScreenVertex& v : poly) { cx += v.x; cy += v.y; }
+    cx /= n; cy /= n;
+
+    // Expand each vertex slightly outward from the centroid to close
+    // sub-pixel cracks between adjacent triangles / faces.
+    // 0.5 px expansion is enough to cover float rounding gaps without
+    // causing visible overlap at normal viewing distances.
+    constexpr float kExpand = 0.55f;
+    std::vector<ScreenVertex> exp(n);
+    for (int i = 0; i < n; ++i) {
+        const float dx = poly[i].x - cx;
+        const float dy = poly[i].y - cy;
+        const float len = std::sqrt(dx*dx + dy*dy);
+        if (len > 1e-4f) {
+            exp[i] = { poly[i].x + dx/len * kExpand,
+                       poly[i].y + dy/len * kExpand,
+                       poly[i].invDepth };
+        } else {
+            exp[i] = poly[i];
+        }
     }
-    const int y0 = std::max(0,              static_cast<int>(std::ceil(minY)));
-    const int y1 = std::min(screenHeight - 1, static_cast<int>(std::ceil(maxY)) - 1);
+
+    float minY = exp[0].y, maxY = exp[0].y;
+    for (int i = 1; i < n; ++i) {
+        if (exp[i].y < minY) { minY = exp[i].y; }
+        if (exp[i].y > maxY) { maxY = exp[i].y; }
+    }
+    const int y0 = std::max(0,               static_cast<int>(std::floor(minY)));
+    const int y1 = std::min(screenHeight - 1, static_cast<int>(std::ceil(maxY)));
 
     for (int y = y0; y <= y1; ++y) {
         const float yc = static_cast<float>(y) + 0.5f;
@@ -99,8 +125,8 @@ void FillConvex(Framebuffer& framebuffer, const std::vector<ScreenVertex>& poly,
 
         for (int i = 0; i < n; ++i) {
             const int j = (i + 1 == n) ? 0 : i + 1;
-            const ScreenVertex& a = poly[i];
-            const ScreenVertex& b = poly[j];
+            const ScreenVertex& a = exp[i];
+            const ScreenVertex& b = exp[j];
             float x0, inv0, y0e, x1, inv1, y1e;
             if (a.y <= b.y) {
                 x0 = a.x; inv0 = a.invDepth; y0e = a.y;
@@ -114,7 +140,7 @@ void FillConvex(Framebuffer& framebuffer, const std::vector<ScreenVertex>& poly,
             if (yc >= y0e && yc < y1e) {
                 const float t = (yc - y0e) / dy;
                 if (count < 8) {
-                    crosses[count].x = x0 + t * (x1 - x0);
+                    crosses[count].x        = x0 + t * (x1 - x0);
                     crosses[count].invDepth = inv0 + t * (inv1 - inv0);
                     ++count;
                 }
@@ -132,15 +158,14 @@ void FillConvex(Framebuffer& framebuffer, const std::vector<ScreenVertex>& poly,
         for (int p = 0; p + 1 < count; p += 2) {
             const float xL = crosses[p].x;
             const float xR = crosses[p + 1].x;
-            // Use half-open intervals [ceil(xL), ceil(xR)) so adjacent
-            // triangles sharing an edge never leave a gap and never
-            // double-draw the shared pixel (top-left fill rule).
-            const int xLi = std::max(0,              static_cast<int>(std::ceil(xL)));
-            const int xRi = std::min(screenWidth - 1, static_cast<int>(std::ceil(xR)) - 1);
+            const int xLi = std::max(0,               static_cast<int>(std::floor(xL)));
+            const int xRi = std::min(screenWidth - 1,  static_cast<int>(std::ceil(xR)));
             if (xLi > xRi) { continue; }
             const float span = xR - xL;
-            const float dInv = (span > 1e-6f) ? (crosses[p + 1].invDepth - crosses[p].invDepth) / span : 0.0f;
-            float inv = crosses[p].invDepth + dInv * (static_cast<float>(xLi) + 0.5f - xL);
+            const float dInv = (span > 1e-6f)
+                ? (crosses[p + 1].invDepth - crosses[p].invDepth) / span : 0.0f;
+            float inv = crosses[p].invDepth
+                + dInv * (static_cast<float>(xLi) + 0.5f - xL);
             const size_t rowBase = static_cast<size_t>(y) * screenWidth;
             for (int x = xLi; x <= xRi; ++x, inv += dInv) {
                 if (inv > 0.0f) {
