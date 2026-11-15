@@ -89,8 +89,8 @@ void FillConvex(Framebuffer& framebuffer, const std::vector<ScreenVertex>& poly,
         if (poly[i].y < minY) { minY = poly[i].y; }
         if (poly[i].y > maxY) { maxY = poly[i].y; }
     }
-    const int y0 = std::max(0, static_cast<int>(std::ceil(minY)));
-    const int y1 = std::min(screenHeight - 1, static_cast<int>(std::floor(maxY)));
+    const int y0 = std::max(0,              static_cast<int>(std::ceil(minY)));
+    const int y1 = std::min(screenHeight - 1, static_cast<int>(std::ceil(maxY)) - 1);
 
     for (int y = y0; y <= y1; ++y) {
         const float yc = static_cast<float>(y) + 0.5f;
@@ -132,8 +132,11 @@ void FillConvex(Framebuffer& framebuffer, const std::vector<ScreenVertex>& poly,
         for (int p = 0; p + 1 < count; p += 2) {
             const float xL = crosses[p].x;
             const float xR = crosses[p + 1].x;
-            const int xLi = std::max(0, static_cast<int>(std::ceil(xL)));
-            const int xRi = std::min(screenWidth - 1, static_cast<int>(std::floor(xR)));
+            // Use half-open intervals [ceil(xL), ceil(xR)) so adjacent
+            // triangles sharing an edge never leave a gap and never
+            // double-draw the shared pixel (top-left fill rule).
+            const int xLi = std::max(0,              static_cast<int>(std::ceil(xL)));
+            const int xRi = std::min(screenWidth - 1, static_cast<int>(std::ceil(xR)) - 1);
             if (xLi > xRi) { continue; }
             const float span = xR - xL;
             const float dInv = (span > 1e-6f) ? (crosses[p + 1].invDepth - crosses[p].invDepth) / span : 0.0f;
