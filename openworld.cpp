@@ -6,14 +6,16 @@
 //   Windows: g++ -O2 -std=c++17 openworld.cpp -o openworld.exe -lglfw3 -lopengl32 -lgdi32
 //   macOS:   clang++ -O2 -std=c++17 openworld.cpp -o openworld -lglfw -framework OpenGL
 //
-// Керування: WASD - рух, миша - огляд, Shift - біг x5, Ctrl - турбо x50 (для тесту чанків),
-//            F - політ/ходьба, Space/C - вгору/вниз у польоті, Esc - вихід.
+// Керування: WASD - рух, миша - огляд, Shift - біг x5, Ctrl - турбо x50, F - політ/ходьба (Space/C вгору/вниз),
+//   E - взяти/покласти предмет, ЛКМ - кинути тримаючи, ПКМ - удар молотом (розбиває),
+//   колесо - відстань тримання, 1/2/3 - створити ящик/скло/камінь, T - стіна з ящиків, Esc - вихід.
 
 #include <GLFW/glfw3.h>
 #include <cmath>
 #include <cstdio>
 #include <vector>
 #include <algorithm>
+#include "physics.hpp"
 
 // ------------------------------------------------------------------ налаштування
 static const int   CHUNK_SIZE   = 5000;              // блоків у чанку по стороні
@@ -204,10 +206,87 @@ static bool  g_fly = false;
 static double g_lastMx = 0, g_lastMy = 0;
 static bool  g_firstMouse = true;
 
+static phys::World g_world;
+static bool g_kE = false, g_kT = false, g_k1 = false, g_k2 = false, g_k3 = false;
+static const char* g_msg = "";
+static float g_msgT = 0;
+
+static void say(const char* m) { g_msg = m; g_msgT = 2.5f; }
+
 static void onKey(GLFWwindow* w, int key, int, int action, int) {
     if (action != GLFW_PRESS) return;
     if (key == GLFW_KEY_ESCAPE) glfwSetWindowShouldClose(w, 1);
     if (key == GLFW_KEY_F) g_fly = !g_fly;
+    if (key == GLFW_KEY_E) g_kE = true;
+    if (key == GLFW_KEY_T) g_kT = true;
+    if (key == GLFW_KEY_1) g_k1 = true;
+    if (key == GLFW_KEY_2) g_k2 = true;
+    if (key == GLFW_KEY_3) g_k3 = true;
+}
+static void onScroll(GLFWwindow*, double, double dy) {
+    g_world.holdDist = std::max(1.f, std::min(5.f, g_world.holdDist + (float)dy * 0.3f));
+}
+
+// ближча до центру карти "суша" без крутих схилів - щоб старт був не у воді
+static void findLand() {
+    float best = 1e30f;
+    for (float z = 1500; z < WORLD_SIZE - 1500; z += 40)
+        for (float x = 1500; x < WORLD_SIZE - 1500; x += 40) {
+            float h = terrainH(x, z);
+            if (h < 8.f || h > 35.f) continue;
+            if (fabsf(terrainH(x + 15, z) - h) > 6.f || fabsf(terrainH(x, z + 15) - h) > 6.f) continue;
+            float dx = x - WORLD_SIZE / 2, dz = z - WORLD_SIZE / 2, d = dx * dx + dz * dz;
+            if (d < best) { best = d; g_px = x; g_pz = z; }
+        }
+}
+
+// ------------------------------------------------------------------ малювання тіл
+static const float FN[6][3] = { {1,0,0},{-1,0,0},{0,1,0},{0,-1,0},{0,0,1},{0,0,-1} };
+static const float FV[6][4][3] = {
+    {{1,-1,-1},{1,1,-1},{1,1,1},{1,-1,1}},   {{-1,-1,-1},{-1,-1,1},{-1,1,1},{-1,1,-1}},
+    {{-1,1,-1},{-1,1,1},{1,1,1},{1,1,-1}},   {{-1,-1,-1},{1,-1,-1},{1,-1,1},{-1,-1,1}},
+    {{-1,-1,1},{1,-1,1},{1,1,1},{-1,1,1}},   {{-1,-1,-1},{-1,1,-1},{1,1,-1},{1,-1,-1}} };
+
+static void drawBody(const phys::Body& b, bool held, float alpha) {
+    const phys::MatDef& m = phys::MATS[b.mat];
+    float mat[16] = {
+        b.R.m[0], b.R.m[3], b.R.m[6], 0,
+        b.R.m[1], b.R.m[4], b.R.m[7], 0,
+        b.R.m[2], b.R.m[5], b.R.m[8], 0,
+        b.pos.x,  b.pos.y,  b.pos.z,  1 };
+    glPushMatrix();
+    glMultMatrixf(mat);
+    glScalef(b.half.x, b.half.y, b.half.z);
+    glBegin(GL_QUADS);
+    for (int f = 0; f < 6; f++) {
+        phys::Vec3 n = phys::mv(b.R, { FN[f][0], FN[f][1], FN[f][2] });
+        float shade = 0.45f + 0.55f * std::max(0.f, n.x * 0.51f + n.y * 0.82f + n.z * 0.31f);
+        float add = held ? 0.25f : 0.f;
+        glColor4f(std::min(1.f, b.cr * shade + add), std::min(1.f, b.cg * shade + add), std::min(1.f, b.cb * shade + add), alpha);
+        for (int v = 0; v < 4; v++) glVertex3f(FV[f][v][0], FV[f][v][1], FV[f][v][2]);
+    }
+    glEnd();
+    glPopMatrix();
+    (void)m;
+}
+
+static void drawCrosshair(int w, int h, bool holding, bool aimingAtBody) {
+    glDisable(GL_FOG);
+    glDisable(GL_DEPTH_TEST);
+    glMatrixMode(GL_PROJECTION); glPushMatrix(); glLoadIdentity(); glOrtho(0, w, h, 0, -1, 1);
+    glMatrixMode(GL_MODELVIEW);  glPushMatrix(); glLoadIdentity();
+    float cx = w * 0.5f, cy = h * 0.5f, s = holding ? 4.f : 8.f;
+    if (aimingAtBody) glColor3f(1.f, 0.9f, 0.2f); else glColor3f(1.f, 1.f, 1.f);
+    glLineWidth(2.f);
+    glBegin(GL_LINES);
+    glVertex2f(cx - s, cy); glVertex2f(cx + s, cy);
+    glVertex2f(cx, cy - s); glVertex2f(cx, cy + s);
+    glEnd();
+    glMatrixMode(GL_MODELVIEW);  glPopMatrix();
+    glMatrixMode(GL_PROJECTION); glPopMatrix();
+    glMatrixMode(GL_MODELVIEW);
+    glEnable(GL_DEPTH_TEST);
+    glEnable(GL_FOG);
 }
 
 struct DrawItem { float dist; Tile* t; int wx0, wz0, lod; };
@@ -220,6 +299,7 @@ int main() {
     glfwSwapInterval(1);
     glfwSetInputMode(win, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
     glfwSetKeyCallback(win, onKey);
+    glfwSetScrollCallback(win, onScroll);
 
     const float sky[4] = { 0.62f, 0.74f, 0.88f, 1.f };
     glEnable(GL_DEPTH_TEST);
@@ -230,13 +310,27 @@ int main() {
     glFogfv(GL_FOG_COLOR, sky);
     glClearColor(sky[0], sky[1], sky[2], 1.f);
 
+    // ---- фізика: старт на суші + кілька предметів навколо
+    srand(1234);
+    g_world.terrainH = terrainH;
+    findLand();
+    for (int i = 0; i < 24; i++) {
+        float a = phys::frand() * 6.2832f, r = 6.f + phys::frand() * 30.f;
+        float x = g_px + cosf(a) * r, z = g_pz + sinf(a) * r;
+        g_world.spawn(i % 3, { x, terrainH(x, z) + 1.f + phys::frand() * 3.f, z }, phys::quatY(phys::frand() * 6.f), phys::Vec3());
+    }
+    g_py = terrainH(g_px, g_pz) + 1.8f;
+
     double lastT = glfwGetTime(), titleT = 0;
     int frames = 0;
+    bool prevL = false, prevR = false;
+    phys::Vec3 playerVel;
 
     while (!glfwWindowShouldClose(win)) {
         double now = glfwGetTime();
         float dt = (float)(now - lastT);
         lastT = now;
+        if (dt < 1e-5f) dt = 1e-5f;
         glfwPollEvents();
 
         // ---- миша
@@ -249,7 +343,8 @@ int main() {
         g_pitch = std::max(-89.f, std::min(89.f, g_pitch));
 
         // ---- рух
-        float yr = g_yaw * PI / 180.f;
+        float oldx = g_px, oldy = g_py, oldz = g_pz;
+        float yr = g_yaw * PI / 180.f, pr = g_pitch * PI / 180.f;
         float fx = sinf(yr), fz = -cosf(yr), rx = cosf(yr), rz = sinf(yr);
         float speed = 12.f;
         if (glfwGetKey(win, GLFW_KEY_LEFT_SHIFT)) speed *= 5.f;
@@ -269,9 +364,47 @@ int main() {
         } else {
             g_py = terrainH(g_px, g_pz) + 1.8f;
         }
+        // швидкість гравця (для кидка "з розгону"); різкі стрибки по рельєфу відсікаємо
+        playerVel = { (g_px - oldx) / dt, 0.f, (g_pz - oldz) / dt };
+        if (g_fly) playerVel.y = (g_py - oldy) / dt;
+        if (phys::len(playerVel) > 40.f) playerVel = phys::Vec3();
 
         // ---- стрімінг чанків
         updateChunks(g_px, g_pz);
+
+        // ---- взаємодія з предметами
+        g_world.eye = { g_px, g_py, g_pz };
+        g_world.fwd = { sinf(yr) * cosf(pr), -sinf(pr), -cosf(yr) * cosf(pr) };
+        phys::Vec3 flatF = { fx, 0, fz };
+        if (g_kE) {
+            if (g_world.heldId) { g_world.release(); say("Покладено"); }
+            else {
+                int r = g_world.grab();
+                if (r == 0) say("Взято (ЛКМ - кинути, колесо - відстань)");
+                else if (r == 1) say("Надто важке");
+                else say("Нічого немає перед тобою");
+            }
+        }
+        bool L = glfwGetMouseButton(win, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+        bool R = glfwGetMouseButton(win, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
+        if (L && !prevL && g_world.heldId) { g_world.throwHeld(playerVel); say("Кинуто"); }
+        if (R && !prevR) {
+            if (g_world.heldId) g_world.release();
+            if (g_world.strike() < 0) say("Мимо");
+        }
+        prevL = L; prevR = R;
+        auto spawnAhead = [&](int mat) {
+            phys::Vec3 p = g_world.eye + g_world.fwd * 2.5f;
+            g_world.spawn(mat, p, phys::quatY(phys::frand() * 6.f), g_world.fwd * 2.f);
+        };
+        if (g_k1) spawnAhead(0);
+        if (g_k2) spawnAhead(1);
+        if (g_k3) spawnAhead(2);
+        if (g_kT) g_world.spawnWall(g_world.eye + flatF * 5.f, yr);
+        g_kE = g_kT = g_k1 = g_k2 = g_k3 = false;
+
+        g_world.update(dt);
+        if (g_msgT > 0) g_msgT -= dt;
 
         // ---- камера
         int fbw, fbh;
@@ -281,7 +414,7 @@ int main() {
         glViewport(0, 0, fbw, fbh);
         glMatrixMode(GL_PROJECTION);
         glLoadIdentity();
-        float nearP = 0.5f, farP = FOG_END + 400.f, fovY = 70.f;
+        float nearP = 0.1f, farP = FOG_END + 400.f, fovY = 70.f;
         float tanHalfV = tanf(fovY * 0.5f * PI / 180.f);
         glFrustum(-nearP * tanHalfV * aspect, nearP * tanHalfV * aspect, -nearP * tanHalfV, nearP * tanHalfV, nearP, farP);
         glMatrixMode(GL_MODELVIEW);
@@ -294,7 +427,7 @@ int main() {
         // ---- відбір видимих плиток (відстань + огляд камери), решта не рендеряться
         std::vector<DrawItem> items;
         float tanHalfH = tanHalfV * aspect * 1.15f; // з запасом на нахил камери
-        const float R = TILE_SIZE * 0.75f;
+        const float Rt = TILE_SIZE * 0.75f;
         int loadedChunks = 0;
         for (int cz = 0; cz < GRID; cz++)
             for (int cx = 0; cx < GRID; cx++) {
@@ -310,12 +443,12 @@ int main() {
                         float dz = wz0 + TILE_SIZE * 0.5f - g_pz;
                         float d = sqrtf(dx * dx + dz * dz);
                         if (d > FOG_END + 400.f) { if (t.list) freeTile(t); continue; }
-                        if (d > FOG_END + R) continue;
-                        if (d > R * 2) { // поряд із гравцем завжди малюємо
+                        if (d > FOG_END + Rt) continue;
+                        if (d > Rt * 2) { // поряд із гравцем завжди малюємо
                             float zf = dx * fx + dz * fz;
                             float xr = dx * rx + dz * rz;
-                            if (zf < -R) continue;
-                            if (fabsf(xr) > zf * tanHalfH + R * 1.5f) continue;
+                            if (zf < -Rt) continue;
+                            if (fabsf(xr) > zf * tanHalfH + Rt * 1.5f) continue;
                         }
                         items.push_back({ d, &t, wx0, wz0, pickLod(d) });
                     }
@@ -336,17 +469,44 @@ int main() {
         for (DrawItem& it : items)
             if (it.t->list) { glCallList(it.t->list); drawn++; }
 
+        // ---- предмети: спочатку непрозорі, потім скло з прозорістю
+        const float maxD2 = FOG_END * FOG_END;
+        int bodiesDrawn = 0;
+        for (int pass = 0; pass < 2; pass++) {
+            if (pass == 1) {
+                glEnable(GL_BLEND);
+                glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+                glDepthMask(GL_FALSE);
+            }
+            for (const phys::Body& b : g_world.bodies) {
+                if (!b.alive || phys::MATS[b.mat].glass != (pass == 1)) continue;
+                float dx = b.pos.x - g_px, dz = b.pos.z - g_pz;
+                if (dx * dx + dz * dz > maxD2) continue;
+                drawBody(b, b.id == g_world.heldId, pass == 1 ? 0.55f : 1.f);
+                bodiesDrawn++;
+            }
+            if (pass == 1) { glDepthMask(GL_TRUE); glDisable(GL_BLEND); }
+        }
+
+        float tHit;
+        bool aim = g_world.raycast(g_world.eye, g_world.fwd, 5.f, tHit) >= 0;
+        drawCrosshair(fbw, fbh, g_world.heldId != 0, aim);
+
         glfwSwapBuffers(win);
 
         // ---- заголовок вікна як HUD
         frames++;
         titleT += dt;
         if (titleT >= 0.5) {
-            char buf[256];
+            char buf[320];
+            phys::Body* hb = g_world.held();
+            char held[96] = "";
+            if (hb) snprintf(held, sizeof held, " | тримаєш: %s, %.0f кг", phys::MATS[hb->mat].name, hb->mass);
             snprintf(buf, sizeof buf,
-                     "XYZ %.0f %.0f %.0f | chunk (%d,%d) | завантажено чанків: %d | плиток: %d | %.0f FPS%s",
+                     "XYZ %.0f %.0f %.0f | чанк (%d,%d) [завантажено: %d] | плиток: %d | тіл: %d | %.0f FPS%s%s%s%s",
                      g_px, g_py, g_pz, (int)(g_px / CHUNK_SIZE), (int)(g_pz / CHUNK_SIZE),
-                     loadedChunks, drawn, frames / titleT, g_fly ? " | FLY" : "");
+                     loadedChunks, drawn, bodiesDrawn, frames / titleT, g_fly ? " | FLY" : "", held,
+                     g_msgT > 0 ? " | " : "", g_msgT > 0 ? g_msg : "");
             glfwSetWindowTitle(win, buf);
             frames = 0; titleT = 0;
         }

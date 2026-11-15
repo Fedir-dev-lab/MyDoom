@@ -40,6 +40,14 @@ public:
                   const std::vector<PointLight>& lights, float ambientLight,
                   const DirectionalLight& sunLight) const;
 
+    // Full-rotation variant: R is a column-major 3×3 rotation matrix (row[i][j] = R[i*3+j]).
+    void DrawMeshOBB(Framebuffer& framebuffer, const Camera& camera,
+                     const Vector3& position,
+                     const float R[9], const Vector3& halfExtents,
+                     uint32_t baseColor,
+                     const std::vector<PointLight>& lights, float ambientLight,
+                     const DirectionalLight& sunLight) const;
+
 private:
     int m_screenWidth;
     int m_screenHeight;

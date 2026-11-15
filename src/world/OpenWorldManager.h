@@ -8,6 +8,7 @@
 #include "core/Vector2.h"
 #include "core/Vector3.h"
 #include "world/LevelData.h"
+#include "physics/PhysicsWorld.h"
 
 // ---------------------------------------------------------------------------
 // OpenWorldManager — chunk-streamed procedural open world.
@@ -62,6 +63,14 @@ public:
     // Returns true if the visible geometry changed (chunks loaded/unloaded).
     bool Update(float playerX, float playerZ);
 
+    // Physics update — call every frame with dt and camera state.
+    void UpdatePhysics(float dt,
+                       const Vector3& eyePos,
+                       const Vector3& fwdDir);
+
+    // Direct access to physics world for input handling and rendering.
+    phys::PhysicsWorld& Physics() { return m_physics; }
+
     // Build renderable geometry for the current frame.
     // Returns sectors (floors) and a flat wall list ready for WallRenderer.
     struct RenderData {
@@ -83,6 +92,7 @@ private:
 
     std::unordered_map<ChunkCoord, Chunk, ChunkCoordHash> m_chunks;
     RenderData m_renderData;
+    phys::PhysicsWorld m_physics;
 
     int m_lastCX = INT_MIN;
     int m_lastCZ = INT_MIN;

@@ -3,6 +3,9 @@
 #include <algorithm>
 #include <cmath>
 
+// Flat open world has no terrain height function — bodies rest on Y=0.
+static float FlatHeight(float /*x*/, float /*z*/) { return 0.0f; }
+
 // ---------------------------------------------------------------------------
 // Hash — deterministic float in [0,1) from two ints and a salt.
 // ---------------------------------------------------------------------------
@@ -62,6 +65,26 @@ void OpenWorldManager::LoadChunk(ChunkCoord coord) {
     chunk.coord     = coord;
     chunk.buildings = GenerateBuildings(coord);
     chunk.loaded    = true;
+
+    // Spawn physics crates near the centre of each chunk.
+    // Only the origin chunk gets bodies so the player has clear space.
+    if (coord.cx != 0 || coord.cz != 0) {
+        const float cx = (coord.cx + 0.5f) * kChunkSize;
+        const float cz = (coord.cz + 0.5f) * kChunkSize;
+        // 4 random crates scattered within the chunk.
+        for (int i = 0; i < 4; ++i) {
+            const float angle  = Hash(coord.cx * 7 + i, coord.cz * 13 + i, 9) * 6.283185f;
+            const float radius = 4.0f + Hash(coord.cx + i, coord.cz - i, 10) * 16.0f;
+            const float bx = cx + std::cos(angle) * radius;
+            const float bz = cz + std::sin(angle) * radius;
+            const int   mat = static_cast<int>(Hash(coord.cx + i, coord.cz + i, 11) * 3.0f) % 3;
+            m_physics.Spawn(mat,
+                { bx, 1.5f, bz },
+                phys::quatY(Hash(coord.cx, coord.cz + i, 12) * 6.283185f),
+                { 0.f, 0.f, 0.f });
+        }
+    }
+
     m_chunks[coord] = std::move(chunk);
 }
 
@@ -73,6 +96,9 @@ void OpenWorldManager::UnloadChunk(ChunkCoord coord) {
 // Update — load/unload chunks around the player, rebuild geometry if changed.
 // ---------------------------------------------------------------------------
 bool OpenWorldManager::Update(float playerX, float playerZ) {
+    // Wire physics terrain function once.
+    if (!m_physics.terrainH)
+        m_physics.terrainH = FlatHeight;
     const int cx = static_cast<int>(std::floor(playerX / kChunkSize));
     const int cz = static_cast<int>(std::floor(playerZ / kChunkSize));
 
@@ -153,4 +179,13 @@ void OpenWorldManager::RebuildRenderData() {
                 Wall({ bx1, 0.f, bz0 }, { bx1, 0.f, bz1 }, 0.f, top, true), amb });
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+void OpenWorldManager::UpdatePhysics(float dt,
+                                     const Vector3& eyePos,
+                                     const Vector3& fwdDir) {
+    m_physics.eye = { eyePos.x, eyePos.y, eyePos.z };
+    m_physics.fwd = { fwdDir.x, fwdDir.y, fwdDir.z };
+    m_physics.Update(dt);
 }

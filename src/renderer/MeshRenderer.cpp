@@ -234,3 +234,83 @@ void MeshRenderer::DrawMesh(Framebuffer& framebuffer, const Camera& camera,
         FillConvex(framebuffer, poly, color, m_screenWidth, m_screenHeight);
     }
 }
+
+// ---------------------------------------------------------------------------
+// DrawMeshOBB — renders an oriented bounding box using a full 3×3 rotation
+// matrix R (column-major, R[r*3+c]).  Builds the 8 corners from halfExtents,
+// rotates them into world space, then rasterises the 12 triangles (6 faces).
+// ---------------------------------------------------------------------------
+void MeshRenderer::DrawMeshOBB(Framebuffer& framebuffer, const Camera& camera,
+                                const Vector3& position,
+                                const float R[9], const Vector3& half,
+                                uint32_t baseColor,
+                                const std::vector<PointLight>& lights,
+                                float ambientLight,
+                                const DirectionalLight& sunLight) const {
+    // 8 corners in local space.
+    const float sx[2] = { -half.x,  half.x };
+    const float sy[2] = { -half.y,  half.y };
+    const float sz[2] = { -half.z,  half.z };
+
+    // local → world: pos + R * corner.
+    auto rotAdd = [&](float lx, float ly, float lz) -> Vector3 {
+        return {
+            position.x + R[0]*lx + R[1]*ly + R[2]*lz,
+            position.y + R[3]*lx + R[4]*ly + R[5]*lz,
+            position.z + R[6]*lx + R[7]*ly + R[8]*lz
+        };
+    };
+
+    // Build world corners (same indexing as MakeCube).
+    const Vector3 W[8] = {
+        rotAdd(sx[0],sy[0],sz[0]), rotAdd(sx[1],sy[0],sz[0]),
+        rotAdd(sx[1],sy[1],sz[0]), rotAdd(sx[0],sy[1],sz[0]),
+        rotAdd(sx[0],sy[0],sz[1]), rotAdd(sx[1],sy[0],sz[1]),
+        rotAdd(sx[1],sy[1],sz[1]), rotAdd(sx[0],sy[1],sz[1]),
+    };
+
+    // 12 triangles matching MakeCube winding (CCW outward).
+    static const int kTris[12][3] = {
+        {4,5,6},{4,6,7},  // +Z
+        {0,3,2},{0,2,1},  // -Z
+        {1,2,6},{1,6,5},  // +X
+        {0,7,3},{0,4,7},  // -X (fixed winding)
+        {2,7,6},{2,3,7},  // +Y
+        {0,5,4},{0,1,5},  // -Y
+    };
+
+    for (const auto& t : kTris) {
+        const Vector3& w0 = W[t[0]];
+        const Vector3& w1 = W[t[1]];
+        const Vector3& w2 = W[t[2]];
+
+        const Vector3 normal = Cross(w1 - w0, w2 - w0);
+        if (normal.LengthSquared() < 1e-10f) continue;
+        if (Vector3::Dot(normal, camera.position - w0) <= 0.0f) continue;
+
+        const Vector3 centroid = (w0 + w1 + w2) / 3.0f;
+        const float lit = ComputeMeshLighting(normal, centroid, lights,
+                                              ambientLight, sunLight);
+        const uint32_t color = ApplyLight(baseColor, lit);
+
+        std::array<ViewVertex, 3> view;
+        for (int i = 0; i < 3; ++i) {
+            const Vector3& wv = (i==0)?w0:(i==1)?w1:w2;
+            const Camera::View vv = camera.ToView(wv);
+            view[i] = { vv.x, vv.y, vv.z };
+        }
+
+        std::vector<ViewVertex> clipped = ClipNear(view);
+        if (clipped.size() < 3) continue;
+
+        std::vector<ScreenVertex> poly;
+        poly.reserve(clipped.size());
+        for (const ViewVertex& v : clipped) {
+            const float invZ = 1.0f / v.z;
+            poly.push_back({ camera.halfWidth  + v.x * invZ * camera.focalLength,
+                             camera.halfHeight - v.y * invZ * camera.focalLength,
+                             invZ });
+        }
+        FillConvex(framebuffer, poly, color, m_screenWidth, m_screenHeight);
+    }
+}

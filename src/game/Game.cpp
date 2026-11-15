@@ -719,9 +719,83 @@ static void Update(AppState& app, float deltaSeconds) {
                        kb[SDL_SCANCODE_A], kb[SDL_SCANCODE_D], mdx, mdy},
                       deltaSeconds, app.map, app.levelState, app.menu.HeadBobEnabled());
 
-    // Open world chunk streaming.
+    // Open world chunk streaming + physics.
     if (app.isOpenWorld) {
         app.openWorld.Update(app.player.Position().x, app.player.Position().z);
+
+        // Build camera forward direction from player yaw+pitch.
+        const float yr = app.player.Angle();
+        const float pr = app.player.Pitch();
+        const Vector3 owFwd = {
+             std::sin(yr) * std::cos(pr),
+            -std::sin(pr),
+             std::cos(yr) * std::cos(pr)
+        };
+        app.openWorld.UpdatePhysics(deltaSeconds, app.player.EyePosition(), owFwd);
+
+        // ---- Physics interaction keys (only in open world) ----
+        phys::PhysicsWorld& pw = app.openWorld.Physics();
+
+        // E — grab / release
+        static bool ePrev = false;
+        const bool  eNow  = kb[SDL_SCANCODE_E];
+        if (eNow && !ePrev) {
+            if (pw.Held()) {
+                pw.Release();
+                app.hud.ShowMessage("RELEASED");
+            } else {
+                int r = pw.Grab();
+                if      (r == 0) app.hud.ShowMessage("GRABBED  (LMB=throw  RMB=strike)");
+                else if (r == 1) app.hud.ShowMessage("TOO HEAVY");
+                else             app.hud.ShowMessage("NOTHING IN RANGE");
+            }
+        }
+        ePrev = eNow;
+
+        // LMB — throw held object
+        const bool lmbNow = (mb & SDL_BUTTON_MASK(SDL_BUTTON_LEFT)) != 0;
+        static bool lmbPrev = false;
+        if (lmbNow && !lmbPrev && pw.Held()) {
+            pw.ThrowHeld({ 0.f, 0.f, 0.f });
+            app.hud.ShowMessage("THROWN");
+        }
+        lmbPrev = lmbNow;
+
+        // RMB — hammer strike
+        const bool rmbNow = (mb & SDL_BUTTON_MASK(SDL_BUTTON_RIGHT)) != 0;
+        static bool rmbPrev = false;
+        if (rmbNow && !rmbPrev) {
+            if (pw.Held()) pw.Release();
+            int hit = pw.Strike();
+            app.hud.ShowMessage(hit >= 0 ? "STRIKE!" : "MISS");
+        }
+        rmbPrev = rmbNow;
+
+        // 1/2/3 — spawn crate / glass / stone ahead
+        auto spawnAhead = [&](int mat) {
+            const phys::Vec3 p = {
+                pw.eye.x + pw.fwd.x * 2.5f,
+                pw.eye.y + pw.fwd.y * 2.5f,
+                pw.eye.z + pw.fwd.z * 2.5f
+            };
+            pw.Spawn(mat, p, phys::quatY(phys::frand() * 6.f), pw.fwd * 2.f);
+        };
+        static bool k1p=false,k2p=false,k3p=false,kTp=false;
+        const bool k1n=kb[SDL_SCANCODE_1],k2n=kb[SDL_SCANCODE_2];
+        const bool k3n=kb[SDL_SCANCODE_3],kTn=kb[SDL_SCANCODE_T];
+        if (k1n && !k1p) { spawnAhead(0); app.hud.ShowMessage("SPAWNED CRATE"); }
+        if (k2n && !k2p) { spawnAhead(1); app.hud.ShowMessage("SPAWNED GLASS"); }
+        if (k3n && !k3p) { spawnAhead(2); app.hud.ShowMessage("SPAWNED STONE"); }
+        if (kTn && !kTp) {
+            const phys::Vec3 base = {
+                pw.eye.x + pw.fwd.x * 5.f,
+                pw.eye.y,
+                pw.eye.z + pw.fwd.z * 5.f
+            };
+            pw.SpawnWall(base, app.player.Angle());
+            app.hud.ShowMessage("WALL BUILT");
+        }
+        k1p=k1n; k2p=k2n; k3p=k3n; kTp=kTn;
     }
 
 #ifdef DEV_MODE
@@ -985,6 +1059,23 @@ static void Render(AppState& app) {
                 wall.bottomHeight.value_or(0.0f),
                 wall.topHeight.value_or(3.0f),
                 activeLights, amb, sunLight, wallTex);
+        }
+
+        // --- Physics bodies (OBB rigid bodies) ---
+        const phys::PhysicsWorld& pw = app.openWorld.Physics();
+        for (const phys::Body& body : pw.bodies) {
+            if (!body.alive) continue;
+            // Colour from body material, brightened if held.
+            const bool held = (body.id == pw.heldId);
+            const float boost = held ? 1.4f : 1.0f;
+            const uint32_t col = Framebuffer::MakeColor(
+                static_cast<uint8_t>(std::min(255.f, body.cr * 255.f * boost)),
+                static_cast<uint8_t>(std::min(255.f, body.cg * 255.f * boost)),
+                static_cast<uint8_t>(std::min(255.f, body.cb * 255.f * boost)));
+            const Vector3 pos{ body.pos.x, body.pos.y, body.pos.z };
+            const Vector3 half{ body.half.x, body.half.y, body.half.z };
+            rc.meshRenderer.DrawMeshOBB(fb, cam, pos, body.R.m, half,
+                col, activeLights, 0.4f, sunLight);
         }
     }
 
