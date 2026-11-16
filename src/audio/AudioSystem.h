@@ -15,6 +15,7 @@
 // ---------------------------------------------------------------------------
 #include <string>
 #include "core/Vector3.h"
+#include "audio/SoundtrackConverter.h"
 
 enum class SoundId {
     Pistol,
@@ -74,6 +75,12 @@ public:
     // Call once per frame in the main game loop to keep audio stream fed.
     void Tick();
 
+    // Soundtrack Profile & Converter API (converts user WAV files into engine synth format)
+    void ApplySoundtrackProfile(const SoundtrackProfile& profile);
+    const SoundtrackProfile& GetSoundtrackProfile() const;
+    bool ConvertAndApplyWav(const std::string& wavPath);
+    void ResetToDefaultSoundtrack();
+
     // Closes audio device and releases all resources.
     void Shutdown();
 
@@ -84,4 +91,5 @@ private:
     bool  m_musicActive = false;
     bool  m_paused      = false;
     bool  m_running     = false;
+    SoundtrackProfile m_profile;
 };

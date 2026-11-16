@@ -583,6 +583,26 @@ static bool HandleInput(AppState& app) {
                         RebuildRenderContext(app, app.menu.SelectedResolution());
                     } else if (action == Menu::MainAction::FullscreenToggled) {
                         SetFullscreen(app, app.menu.FullscreenEnabled());
+                    } else if (action == Menu::MainAction::ConvertMusicProject) {
+                        const std::string path = app.assetDirectory + "/music/MusicProject.wav";
+                        if (app.audio.ConvertAndApplyWav(path)) {
+                            const auto& prof = app.audio.GetSoundtrackProfile();
+                            app.menu.SetSoundtrackInfo(prof.name, static_cast<int>(prof.bpm), true, prof.statusMessage);
+                        } else {
+                            app.menu.SetSoundtrackInfo("CONVERSION FAILED", 0, false, "FILE NOT FOUND OR INVALID WAV");
+                        }
+                    } else if (action == Menu::MainAction::ConvertCustomWav) {
+                        const std::string path = app.assetDirectory + "/music/custom.wav";
+                        if (app.audio.ConvertAndApplyWav(path)) {
+                            const auto& prof = app.audio.GetSoundtrackProfile();
+                            app.menu.SetSoundtrackInfo(prof.name, static_cast<int>(prof.bpm), true, prof.statusMessage);
+                        } else {
+                            app.menu.SetSoundtrackInfo("CONVERSION FAILED", 0, false, "DROP WAV TO assets/music/custom.wav");
+                        }
+                    } else if (action == Menu::MainAction::ResetDefaultMusic) {
+                        app.audio.ResetToDefaultSoundtrack();
+                        const auto& prof = app.audio.GetSoundtrackProfile();
+                        app.menu.SetSoundtrackInfo(prof.name, static_cast<int>(prof.bpm), false, "RESET TO MARS AMBIENT");
                     } else if (action == Menu::MainAction::Exit) {
                         return false;
                     }

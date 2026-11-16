@@ -112,6 +112,7 @@ void Menu::NavigateUp() {
     int items = kMainItems;
     if (m_screen == Screen::Load || m_screen == Screen::Save) items = kSlotRows;
     else if (m_screen == Screen::Settings) items = kSettingsItems + 1; // +1 for BACK
+    else if (m_screen == Screen::Soundtrack) items = kSoundtrackItems;
     m_selectedIndex = (m_selectedIndex + items - 1) % items;
 }
 
@@ -119,6 +120,7 @@ void Menu::NavigateDown() {
     int items = kMainItems;
     if (m_screen == Screen::Load || m_screen == Screen::Save) items = kSlotRows;
     else if (m_screen == Screen::Settings) items = kSettingsItems + 1;
+    else if (m_screen == Screen::Soundtrack) items = kSoundtrackItems;
     m_selectedIndex = (m_selectedIndex + 1) % items;
 }
 
@@ -127,8 +129,21 @@ Menu::MainAction Menu::Confirm() {
         switch (m_selectedIndex) {
             case 0: m_visible = false; return MainAction::NewGame;
             case 1: m_screen = Screen::Load; m_selectedIndex = 0; return MainAction::None;
-            case 2: m_screen = Screen::Settings; m_selectedIndex = 0; return MainAction::None;
-            case 3: return MainAction::Exit;
+            case 2: m_screen = Screen::Soundtrack; m_selectedIndex = 0; return MainAction::None;
+            case 3: m_screen = Screen::Settings; m_selectedIndex = 0; return MainAction::None;
+            case 4: return MainAction::Exit;
+        }
+    }
+
+    if (m_screen == Screen::Soundtrack) {
+        switch (m_selectedIndex) {
+            case 0: return MainAction::ConvertMusicProject;
+            case 1: return MainAction::ConvertCustomWav;
+            case 2: return MainAction::ResetDefaultMusic;
+            case 3:
+                m_screen = Screen::Main;
+                m_selectedIndex = 2; // re-select "SOUNDTRACK"
+                return MainAction::None;
         }
     }
 
@@ -178,7 +193,7 @@ Menu::MainAction Menu::Confirm() {
             }
         } else {
             m_screen = Screen::Main;
-            m_selectedIndex = 2;
+            m_selectedIndex = 3;
         }
     }
 
@@ -187,8 +202,16 @@ Menu::MainAction Menu::Confirm() {
 
 void Menu::Back() {
     if (m_screen != Screen::Main) {
-        m_screen = Screen::Main;
-        m_selectedIndex = 0;
+        if (m_screen == Screen::Soundtrack) {
+            m_screen = Screen::Main;
+            m_selectedIndex = 2;
+        } else if (m_screen == Screen::Settings) {
+            m_screen = Screen::Main;
+            m_selectedIndex = 3;
+        } else {
+            m_screen = Screen::Main;
+            m_selectedIndex = 0;
+        }
     }
     // On Main screen Esc does nothing — game stays paused in menu
 }
@@ -204,10 +227,11 @@ void Menu::Draw(Framebuffer& fb) const {
                 Framebuffer::MakeColor(8, 6, 12), true);
 
     switch (m_screen) {
-        case Screen::Main:     DrawMain(fb);               break;
-        case Screen::Load:     DrawSlotScreen(fb, false);  break;
-        case Screen::Save:     DrawSlotScreen(fb, true);   break;
-        case Screen::Settings: DrawSettings(fb);           break;
+        case Screen::Main:       DrawMain(fb);               break;
+        case Screen::Load:       DrawSlotScreen(fb, false);  break;
+        case Screen::Save:       DrawSlotScreen(fb, true);   break;
+        case Screen::Settings:   DrawSettings(fb);           break;
+        case Screen::Soundtrack: DrawSoundtrack(fb);         break;
     }
 }
 
@@ -235,7 +259,7 @@ void Menu::DrawMain(Framebuffer& fb) const {
     fb.DrawLine(cx - S(120), lineY, cx + S(120), lineY,
                 Framebuffer::MakeColor(80, 30, 30));
 
-    const char* items[kMainItems] = { "NEW GAME", "LOAD GAME", "SETTINGS", "EXIT" };
+    const char* items[kMainItems] = { "NEW GAME", "LOAD GAME", "SOUNDTRACK", "SETTINGS", "EXIT" };
     const int kIS    = std::max(1, static_cast<int>(3 * sf));
     const int startY = lineY + S(20);
     const int step   = 5 * kIS + S(10);
@@ -443,6 +467,77 @@ void Menu::DrawSettings(Framebuffer& fb) const {
     const char* hint = (m_selectedIndex == 4)             ? "ENTER  CYCLE   ESC  BACK"
                      : (m_selectedIndex == kSettingsItems) ? "ENTER  SELECT   ESC  BACK"
                      :                                       "ENTER  TOGGLE   ESC  BACK";
+    const int footerY = H - S(16);
+    if (kSub > 1)
+        DrawText(fb, cx - TextWidth(hint, kSub) / 2 + 1, footerY + 1,
+                 hint, kShadow, kSub);
+    DrawText(fb, cx - TextWidth(hint, kSub) / 2, footerY,
+             hint, Framebuffer::MakeColor(100, 86, 70), kSub);
+}
+
+// ---------------------------------------------------------------------------
+// DrawSoundtrack — live procedural soundtrack & WAV converter screen
+// ---------------------------------------------------------------------------
+void Menu::DrawSoundtrack(Framebuffer& fb) const {
+    const int W = fb.Width(), H = fb.Height(), cx = W / 2;
+    const float sf = static_cast<float>(W) / 640.0f;
+    const auto S = [&](int v) { return std::max(1, static_cast<int>(v * sf)); };
+
+    const uint32_t kTitle  = Framebuffer::MakeColor(180, 30, 30);
+    const uint32_t kSel    = Framebuffer::MakeColor(220, 200, 60);
+    const uint32_t kNormal = Framebuffer::MakeColor(120, 100, 80);
+    const uint32_t kActive = Framebuffer::MakeColor(80, 200, 120);
+    const uint32_t kShadow = Framebuffer::MakeColor(20,  15, 15);
+    const uint32_t kInfo   = Framebuffer::MakeColor(100, 160, 220);
+
+    const int kTS = std::max(1, static_cast<int>(3 * sf));
+    const char* title = "SOUNDTRACK EDITOR";
+    const int tx = cx - TextWidth(title, kTS) / 2;
+    const int ty = H / 10;
+    DrawText(fb, tx + S(1), ty + S(1), title, kShadow, kTS);
+    DrawText(fb, tx,        ty,        title, kTitle,  kTS);
+
+    const int kSS    = std::max(1, static_cast<int>(2 * sf));
+    const int kSub   = std::max(1, static_cast<int>(sf));
+    const int startY = ty + 5 * kTS + S(14);
+
+    // Current Track Info Box
+    char trackBuf[64];
+    std::snprintf(trackBuf, sizeof(trackBuf), "CURRENT: %s", m_soundtrackName.c_str());
+    DrawText(fb, cx - TextWidth(trackBuf, kSub) / 2, startY, trackBuf, kActive, kSub);
+
+    char bpmBuf[48];
+    std::snprintf(bpmBuf, sizeof(bpmBuf), "TEMPO: %d BPM  SYNTH REALTIME", m_soundtrackBpm);
+    DrawText(fb, cx - TextWidth(bpmBuf, kSub) / 2, startY + 5 * kSub + S(3), bpmBuf, kInfo, kSub);
+
+    // Status Message from Converter
+    DrawText(fb, cx - TextWidth(m_soundtrackStatus.c_str(), kSub) / 2,
+             startY + 10 * kSub + S(6), m_soundtrackStatus.c_str(),
+             m_soundtrackCustom ? kActive : kNormal, kSub);
+
+    // Actions list
+    const char* actions[kSoundtrackItems] = {
+        "CONVERT MUSICPROJECT.WAV",
+        "CONVERT CUSTOM.WAV",
+        "RESET MARS AMBIENT",
+        "BACK"
+    };
+
+    const int actionStartY = startY + S(36);
+    const int step         = 5 * kSS + S(14);
+
+    for (int i = 0; i < kSoundtrackItems; ++i) {
+        const int iy   = actionStartY + i * step;
+        const bool sel = (i == m_selectedIndex);
+        const int iw   = TextWidth(actions[i], kSS);
+        const int ix   = cx - iw / 2;
+
+        if (sel) DrawText(fb, ix - 4 * kSS, iy, ">", kSel, kSS);
+        DrawText(fb, ix + S(1), iy + S(1), actions[i], kShadow, kSS);
+        DrawText(fb, ix,        iy,        actions[i], sel ? kSel : kNormal, kSS);
+    }
+
+    const char* hint = "W S  MOVE   ENTER  SELECT   ESC  BACK";
     const int footerY = H - S(16);
     if (kSub > 1)
         DrawText(fb, cx - TextWidth(hint, kSub) / 2 + 1, footerY + 1,

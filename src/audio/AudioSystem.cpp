@@ -148,7 +148,9 @@ struct ProceduralSynth {
     int   chordIndex    = 0;
     float chordTimer    = 0.0f;
 
-    static constexpr float kChords[4][4] = {
+    float bpm         = 72.0f;
+    float subBassFreq = 55.0f;
+    float chords[4][4] = {
         { 110.00f, 130.81f, 164.81f, 196.00f }, // Am9
         {  87.31f, 110.00f, 130.81f, 164.81f }, // Fmaj7
         {  73.42f,  87.31f, 110.00f, 130.81f }, // Dm9
@@ -161,7 +163,7 @@ struct ProceduralSynth {
     float arpTimer   = 0.0f;
     float arpEnv     = 0.0f;
 
-    static constexpr float kArpNotes[16] = {
+    float arpNotes[16] = {
         220.00f, 261.63f, 329.63f, 392.00f,
         440.00f, 392.00f, 329.63f, 261.63f,
         220.00f, 329.63f, 261.63f, 440.00f,
@@ -183,12 +185,27 @@ struct ProceduralSynth {
     float hatAmp   = 0.0f;
     int   lastHalf = -1;
 
-    static constexpr float kBPM      = 72.0f;
-    static constexpr float kBeatDur  = 60.0f / kBPM;
-    static constexpr float kStepDur  = kBeatDur * 0.25f;
-    static constexpr float kChordDur = kBeatDur * 8.0f;
+    void LoadProfile(const SoundtrackProfile& profile) {
+        bpm = profile.bpm;
+        subBassFreq = profile.subBassFreq;
+        for (int i = 0; i < 4; ++i) {
+            for (int j = 0; j < 4; ++j) {
+                chords[i][j] = profile.chords[i][j];
+            }
+        }
+        for (int i = 0; i < 16; ++i) {
+            arpNotes[i] = profile.arpNotes[i];
+        }
+        for (int k = 0; k < 4; ++k) {
+            targetFreq[k] = chords[chordIndex % 4][k];
+        }
+    }
 
     void ProcessSample(float& outL, float& outR) {
+        const float bDur = 60.0f / bpm;
+        const float sDur = bDur * 0.25f;
+        const float cDur = bDur * 8.0f;
+
         // 1. Wind
         windLfoPhase += 0.08f * dt;
         if (windLfoPhase > 1.0f) windLfoPhase -= 1.0f;
@@ -198,11 +215,11 @@ struct ProceduralSynth {
         const float windR = windLPR.Process(noise.Next(), windCutoffR) * 0.12f;
 
         // 2. Sub-Bass
-        subPhaseL += 54.7f * dt;
+        subPhaseL += (subBassFreq - 0.3f) * dt;
         if (subPhaseL >= 1.0f) subPhaseL -= 1.0f;
-        subPhaseR += 55.3f * dt;
+        subPhaseR += (subBassFreq + 0.3f) * dt;
         if (subPhaseR >= 1.0f) subPhaseR -= 1.0f;
-        subPhaseHarm += 110.0f * dt;
+        subPhaseHarm += (subBassFreq * 2.0f) * dt;
         if (subPhaseHarm >= 1.0f) subPhaseHarm -= 1.0f;
         const float subBassL = std::sin(subPhaseL * kTwoPi) * 0.22f +
                                std::sin(subPhaseHarm * kTwoPi) * 0.05f;
@@ -211,11 +228,11 @@ struct ProceduralSynth {
 
         // 3. Pad
         chordTimer += dt;
-        if (chordTimer >= kChordDur) {
-            chordTimer -= kChordDur;
+        if (chordTimer >= cDur) {
+            chordTimer -= cDur;
             chordIndex = (chordIndex + 1) % 4;
             for (int k = 0; k < 4; ++k) {
-                targetFreq[k] = kChords[chordIndex][k];
+                targetFreq[k] = chords[chordIndex][k];
             }
         }
         for (int k = 0; k < 4; ++k) {
@@ -235,12 +252,12 @@ struct ProceduralSynth {
 
         // 4. Arpeggio & Delay
         arpTimer += dt;
-        if (arpTimer >= kStepDur) {
-            arpTimer -= kStepDur;
+        if (arpTimer >= sDur) {
+            arpTimer -= sDur;
             arpStep = (arpStep + 1) % 16;
             arpEnv  = 0.75f;
         }
-        arpPhase += kArpNotes[arpStep] * dt;
+        arpPhase += arpNotes[arpStep] * dt;
         if (arpPhase >= 1.0f) arpPhase -= 1.0f;
         const float tri = (arpPhase < 0.5f) ? (4.0f * arpPhase - 1.0f)
                                             : (3.0f - 4.0f * arpPhase);
@@ -258,7 +275,7 @@ struct ProceduralSynth {
         const float finalArpR = arpVoice * 0.4f + echoR * 0.5f;
 
         // 5. Kick
-        const int beatIdx = static_cast<int>(t / kBeatDur);
+        const int beatIdx = static_cast<int>(t / bDur);
         if (beatIdx != lastBeat) {
             lastBeat = beatIdx;
             if (beatIdx % 2 == 0) {
@@ -274,7 +291,7 @@ struct ProceduralSynth {
         const float kick = std::sin(kickPhase * kTwoPi) * kickAmp;
 
         // 6. Hi-hat
-        const int halfBeat = static_cast<int>(t / (kBeatDur * 0.5f));
+        const int halfBeat = static_cast<int>(t / (bDur * 0.5f));
         if (halfBeat != lastHalf) {
             lastHalf = halfBeat;
             hatAmp   = 0.085f;
@@ -752,7 +769,34 @@ bool AudioSystem::PlayProceduralMusic(float volume) {
     m_musicActive = true;
     m_volume      = std::clamp(volume, 0.0f, 1.0f);
     m_impl->musicSynth = ProceduralSynth{};
+    m_impl->musicSynth.LoadProfile(m_profile);
     return true;
+}
+
+void AudioSystem::ApplySoundtrackProfile(const SoundtrackProfile& profile) {
+    m_profile = profile;
+    if (m_impl) {
+        m_impl->musicSynth.LoadProfile(m_profile);
+    }
+}
+
+const SoundtrackProfile& AudioSystem::GetSoundtrackProfile() const {
+    return m_profile;
+}
+
+bool AudioSystem::ConvertAndApplyWav(const std::string& wavPath) {
+    SoundtrackProfile newProf;
+    if (!SoundtrackConverter::ConvertWav(wavPath, newProf)) {
+        return false;
+    }
+    ApplySoundtrackProfile(newProf);
+    PlayProceduralMusic(m_volume);
+    return true;
+}
+
+void AudioSystem::ResetToDefaultSoundtrack() {
+    ApplySoundtrackProfile(SoundtrackConverter::DefaultProfile());
+    PlayProceduralMusic(m_volume);
 }
 
 void AudioSystem::StopMusic() {
