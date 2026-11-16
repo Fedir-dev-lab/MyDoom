@@ -59,6 +59,7 @@ void Enemy::Alert() {
     if (IsAlive() && (m_state == EnemyState::Idle || m_state == EnemyState::Patrol)) {
         m_state = EnemyState::Alert;
         m_stateTimer = 0.35f;
+        m_justAlerted = true;
     }
 }
 
@@ -67,6 +68,11 @@ void Enemy::Update(float deltaSeconds, Player& player, const Map& map,
                    const std::vector<Enemy>& allEnemies, size_t selfIndex,
                    std::optional<ProjectileSpawn>& outProjectile) {
     outProjectile.reset();
+    m_justAlerted  = false;
+    m_justAttacked = false;
+    m_justHurt     = false;
+    m_justDied     = false;
+    m_justStepped  = false;
 
     if (!IsAlive()) {
         m_state = EnemyState::Dead;
@@ -93,6 +99,7 @@ void Enemy::Update(float deltaSeconds, Player& player, const Map& map,
                 m_state = EnemyState::Alert;
                 m_stateTimer = 0.35f;
                 m_path.clear();
+                m_justAlerted = true;
             } else {
                 m_patrolTimer += deltaSeconds;
                 if (m_patrolTimer >= 4.0f) {
@@ -120,6 +127,7 @@ void Enemy::Update(float deltaSeconds, Player& player, const Map& map,
                 m_state = EnemyState::Alert;
                 m_stateTimer = 0.35f;
                 m_path.clear();
+                m_justAlerted = true;
                 return;
             }
 
@@ -222,6 +230,7 @@ void Enemy::Update(float deltaSeconds, Player& player, const Map& map,
                     };
                     m_attackCooldown = 1.8f;
                     m_state = EnemyState::Chase;
+                    m_justAttacked = true;
                 }
             } else {
                 m_state = EnemyState::Chase;
@@ -265,6 +274,7 @@ void Enemy::Update(float deltaSeconds, Player& player, const Map& map,
                         player.TakeDamage(kAttackDamage);
                         m_attackCooldown = kAttackInterval;
                         m_state = EnemyState::Attack;
+                        m_justAttacked = true;
                     }
                     return;
                 }
@@ -278,6 +288,7 @@ void Enemy::Update(float deltaSeconds, Player& player, const Map& map,
                         player.TakeDamage(kAttackDamage);
                         m_attackCooldown = kAttackInterval;
                         m_state = EnemyState::Attack;
+                        m_justAttacked = true;
                     }
                     return;
                 }
@@ -374,6 +385,14 @@ void Enemy::Update(float deltaSeconds, Player& player, const Map& map,
                     }
                 }
             }
+
+            // Monster footstep cadence
+            m_stepTimer += deltaSeconds;
+            const float kInterval = (m_type == EnemyType::Tank ? 0.65f : 0.38f);
+            if (m_stepTimer >= kInterval) {
+                m_stepTimer -= kInterval;
+                m_justStepped = true;
+            }
             break;
         }
 
@@ -389,11 +408,13 @@ void Enemy::TakeDamage(int damage) {
         m_health = 0;
         m_state = EnemyState::Dead;
         m_hurtTimer = 0.0f;
+        m_justDied = true;
         return;
     }
     m_hurtTimer = 0.15f;
     m_state = EnemyState::Hurt;
     m_stateTimer = 0.15f;
+    m_justHurt = true;
 }
 
 void Enemy::LoadState(const Vector3& pos, int health, float attackCooldown,

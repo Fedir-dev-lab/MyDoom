@@ -52,6 +52,12 @@ public:
     float Height() const { return m_height; }
     float AttackCooldown() const { return m_attackCooldown; }
 
+    bool JustAlerted()  const { return m_justAlerted; }
+    bool JustAttacked() const { return m_justAttacked; }
+    bool JustHurt()     const { return m_justHurt; }
+    bool JustDied()     const { return m_justDied; }
+    bool JustStepped()  const { return m_justStepped; }
+
     void Alert();
     void TakeDamage(int damage);
     void Reset();
@@ -93,4 +99,12 @@ private:
     Vector3 m_patrolTarget{0.0f, 0.0f, 0.0f};
     bool m_returningToSpawn = false;
     int   m_patrolDirection = 1;
+
+    // Transient audio / event triggers
+    bool m_justAlerted  = false;
+    bool m_justAttacked = false;
+    bool m_justHurt     = false;
+    bool m_justDied     = false;
+    bool m_justStepped  = false;
+    float m_stepTimer   = 0.0f;
 };

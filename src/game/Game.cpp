@@ -751,6 +751,18 @@ static void Update(AppState& app, float deltaSeconds) {
                        kb[SDL_SCANCODE_A], kb[SDL_SCANCODE_D], mdx, mdy},
                       deltaSeconds, app.map, app.levelState, app.menu.HeadBobEnabled());
 
+    // Player footstep audio cadence
+    const bool playerIsMoving = kb[SDL_SCANCODE_W] || kb[SDL_SCANCODE_S] ||
+                                kb[SDL_SCANCODE_A] || kb[SDL_SCANCODE_D];
+    if (playerIsMoving && app.player.IsAlive()) {
+        static float playerStepTimer = 0.0f;
+        playerStepTimer += deltaSeconds;
+        if (playerStepTimer >= 0.42f) {
+            playerStepTimer = 0.0f;
+            app.audio.PlaySound(SoundId::PlayerStep, 0.45f);
+        }
+    }
+
     // Open world chunk streaming + physics.
     if (app.isOpenWorld) {
         app.openWorld.Update(app.player.Position().x, app.player.Position().z);
@@ -920,6 +932,20 @@ static void Update(AppState& app, float deltaSeconds) {
                           app.player.Position(), app.player.Angle(),
                           app.map, app.enemies);
         if (app.weapon.JustFired()) {
+            switch (app.weapon.ActiveType()) {
+                case WeaponType::Pistol:
+                    app.audio.PlaySound(SoundId::Pistol, 0.75f);
+                    break;
+                case WeaponType::Shotgun:
+                    app.audio.PlaySound(SoundId::Shotgun, 0.95f);
+                    break;
+                case WeaponType::Chaingun:
+                    app.audio.PlaySound(SoundId::Chaingun, 0.80f);
+                    break;
+                default:
+                    app.audio.PlaySound(SoundId::Pistol, 0.75f);
+                    break;
+            }
             for (Enemy& e : app.enemies) {
                 if (e.IsAlive() && (e.Position() - app.player.Position()).Length() < 22.0f) {
                     e.Alert();
@@ -932,6 +958,44 @@ static void Update(AppState& app, float deltaSeconds) {
         std::optional<ProjectileSpawn> projSpawn;
         app.enemies[i].Update(deltaSeconds, app.player, app.map, app.levelState,
                               app.enemies, i, projSpawn);
+
+        const Vector3& enemyPos  = app.enemies[i].Position();
+        const Vector3& playerPos = app.player.Position();
+        const float    playerYaw = app.player.Angle();
+
+        // 1. Monster alert screech
+        if (app.enemies[i].JustAlerted()) {
+            app.audio.PlaySpatialSound(SoundId::MonsterAlert, enemyPos, playerPos, playerYaw, 0.90f);
+        }
+        // 2. Monster attacks
+        if (app.enemies[i].JustAttacked()) {
+            switch (app.enemies[i].Type()) {
+                case EnemyType::MantisScout:
+                    app.audio.PlaySpatialSound(SoundId::MonsterAttackScout, enemyPos, playerPos, playerYaw, 0.85f);
+                    break;
+                case EnemyType::Tank:
+                    app.audio.PlaySpatialSound(SoundId::MonsterAttackTank, enemyPos, playerPos, playerYaw, 1.05f);
+                    break;
+                case EnemyType::Shooter:
+                    app.audio.PlaySpatialSound(SoundId::MonsterAttackShooter, enemyPos, playerPos, playerYaw, 0.85f);
+                    break;
+            }
+        }
+        // 3. Monster hurt screech
+        if (app.enemies[i].JustHurt()) {
+            app.audio.PlaySpatialSound(SoundId::MonsterHurt, enemyPos, playerPos, playerYaw, 0.85f);
+        }
+        // 4. Monster death shriek
+        if (app.enemies[i].JustDied()) {
+            app.audio.PlaySpatialSound(SoundId::MonsterDeath, enemyPos, playerPos, playerYaw, 1.0f);
+        }
+        // 5. Monster footsteps / scuttles
+        if (app.enemies[i].JustStepped()) {
+            const SoundId stepSnd = (app.enemies[i].Type() == EnemyType::Tank)
+                                  ? SoundId::MonsterStepHeavy
+                                  : SoundId::MonsterStep;
+            app.audio.PlaySpatialSound(stepSnd, enemyPos, playerPos, playerYaw, 0.45f);
+        }
         if (projSpawn) {
             Vector3 dir = (projSpawn->target - projSpawn->position);
             const float len = dir.Length();
