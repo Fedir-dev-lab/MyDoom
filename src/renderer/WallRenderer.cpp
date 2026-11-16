@@ -234,51 +234,81 @@ void WallRenderer::DrawWall(Framebuffer& framebuffer, const Camera& camera,
     // Draw all 5 textured faces.
     // -----------------------------------------------------------------------
 
-    // Front face (main visible surface): F0→F1→F2→F3
-    // UV: u along wall length (0→1), v bottom(1)→top(0)
+    // UV scale: 1 world unit = 1 texture tile, so the texture repeats
+    // rather than stretches across walls of different sizes.
+    const float wallLen  = len;                            // length along X/Z
+    const float wallH    = topHeight - bottomHeight;       // height
+    const float wallT    = kWallThickness;                 // depth
+
+    // Front face: U along wall length, V along height.
     {
         const std::vector<Vector3> wv = { F0, F1, F2, F3 };
-        const float uvs[8] = { 0.f,1.f,  1.f,1.f,  1.f,0.f,  0.f,0.f };
+        const float uvs[8] = {
+            0.f,     wallH,
+            wallLen, wallH,
+            wallLen, 0.f,
+            0.f,     0.f
+        };
         drawTexFace(wv, uvs);
     }
 
-    // Back face (inward-facing): B0→B3→B2→B1
-    // Mirror UV horizontally so texture reads same direction
+    // Back face (inward-facing): mirror U so texture reads same direction.
     {
         const std::vector<Vector3> wv = { B0, B3, B2, B1 };
-        const float uvs[8] = { 1.f,1.f,  1.f,0.f,  0.f,0.f,  0.f,1.f };
+        const float uvs[8] = {
+            wallLen, wallH,
+            wallLen, 0.f,
+            0.f,     0.f,
+            0.f,     wallH
+        };
         drawTexFace(wv, uvs);
     }
 
-    // Top cap: F3→F2→B2→B3
-    // Normal points up (+Y). UV mapped across the narrow thickness.
+    // Top cap: U along wall length, V along thickness.
     {
         const std::vector<Vector3> wv = { F3, F2, B2, B3 };
-        const float uvs[8] = { 0.f,0.f,  1.f,0.f,  1.f,1.f,  0.f,1.f };
+        const float uvs[8] = {
+            0.f,     0.f,
+            wallLen, 0.f,
+            wallLen, wallT,
+            0.f,     wallT
+        };
         drawTexFace(wv, uvs);
     }
 
-    // Bottom cap: F0→B0→B1→F1
-    // Normal points down (-Y). Same UV layout as top.
+    // Bottom cap: same as top.
     {
         const std::vector<Vector3> wv = { F0, B0, B1, F1 };
-        const float uvs[8] = { 0.f,0.f,  1.f,0.f,  1.f,1.f,  0.f,1.f };
+        const float uvs[8] = {
+            0.f,     0.f,
+            wallT,   0.f,
+            wallT,   wallLen,
+            0.f,     wallLen
+        };
         drawTexFace(wv, uvs);
     }
 
-    // Left cap (start side) — CCW from outside: F0, F3, B3, B0
-    // Normal points toward start (away from wall) — verified by cross product.
+    // Left cap (start side): U along thickness, V along height.
     {
         const std::vector<Vector3> wv = { F0, F3, B3, B0 };
-        const float uvs[8] = { 0.f,1.f,  0.f,0.f,  1.f,0.f,  1.f,1.f };
+        const float uvs[8] = {
+            0.f,   wallH,
+            0.f,   0.f,
+            wallT, 0.f,
+            wallT, wallH
+        };
         drawTexFace(wv, uvs);
     }
 
-    // Right cap (end side) — CCW from outside: B1, B2, F2, F1
-    // Normal points toward end (away from wall) — verified by cross product.
+    // Right cap (end side): same as left.
     {
         const std::vector<Vector3> wv = { B1, B2, F2, F1 };
-        const float uvs[8] = { 0.f,1.f,  0.f,0.f,  1.f,0.f,  1.f,1.f };
+        const float uvs[8] = {
+            0.f,   wallH,
+            0.f,   0.f,
+            wallT, 0.f,
+            wallT, wallH
+        };
         drawTexFace(wv, uvs);
     }
 }
