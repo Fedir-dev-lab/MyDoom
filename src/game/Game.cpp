@@ -239,6 +239,23 @@ static void DestroyApp(AppState& app) {
 }
 
 // ---------------------------------------------------------------------------
+// SyncMusic — plays music in menu/paused states, stops it during gameplay.
+// Call after every gameState change.
+// ---------------------------------------------------------------------------
+static void SyncMusic(AppState& app) {
+    const bool inMenu = (app.gameState == GameState::Menu ||
+                         app.gameState == GameState::Paused ||
+                         app.gameState == GameState::Dead    ||
+                         app.gameState == GameState::LevelComplete);
+    if (inMenu) {
+        if (!app.audio.IsPlaying())
+            app.audio.PlayMusic(app.assetDirectory + "/music/MusicProject.wav", 0.7f);
+    } else {
+        app.audio.StopMusic();
+    }
+}
+
+// ---------------------------------------------------------------------------
 // StartNewGame — resets every state that belongs to the current level.
 // ---------------------------------------------------------------------------
 static void StartNewGame(AppState& app) {
@@ -336,6 +353,7 @@ static void LoadRequestedLevel(AppState& app) {
         app.pendingLoadSlot = -1;
         app.hud.ShowMessage("OPEN WORLD");
         app.gameState = GameState::Playing;
+        SyncMusic(app);
 
         // Prime the first chunk load.
         app.openWorld.Update(spawn.x, spawn.z);
@@ -356,6 +374,7 @@ static void LoadRequestedLevel(AppState& app) {
         app.isLevelTransition = false;
         app.requestedLevelId.clear();
         app.gameState = GameState::Menu;
+        SyncMusic(app);
         app.menu.Show();
         return;
     }
@@ -403,6 +422,7 @@ static void LoadRequestedLevel(AppState& app) {
         Logger::Info("Loaded level: " + app.currentLevelId);
     }
     app.gameState = GameState::Playing;
+    SyncMusic(app);
 }
 
 // ---------------------------------------------------------------------------
@@ -542,6 +562,7 @@ static bool HandleInput(AppState& app) {
                     } else if (app.gameState == GameState::Paused) {
                         app.menu.Hide();
                         app.gameState = GameState::Playing;
+                        SyncMusic(app);
                     }
                 } else if (key == SDLK_W || key == SDLK_UP) {
                     app.menu.NavigateUp();
@@ -556,6 +577,7 @@ static bool HandleInput(AppState& app) {
                     } else if (action == Menu::MainAction::SaveGame) {
                         DoSave(app, app.menu.SaveSlot());
                         app.gameState = GameState::Playing;
+                        SyncMusic(app);
                     } else if (action == Menu::MainAction::ResolutionChanged) {
                         // Rebuild everything at the new render resolution.
                         RebuildRenderContext(app, app.menu.SelectedResolution());
@@ -575,6 +597,7 @@ static bool HandleInput(AppState& app) {
                 } else if (key == SDLK_ESCAPE) {
                     app.menu.Show();
                     app.gameState = GameState::Paused;
+                    SyncMusic(app);
                 }
                 return true;
             }
@@ -584,6 +607,7 @@ static bool HandleInput(AppState& app) {
                 if (key == SDLK_RETURN || key == SDLK_KP_ENTER || key == SDLK_ESCAPE) {
                     app.menu.Show();
                     app.gameState = GameState::Menu;
+                    SyncMusic(app);
                 }
                 return true;
             }
@@ -596,6 +620,7 @@ static bool HandleInput(AppState& app) {
             if (key == SDLK_ESCAPE) {
                 app.menu.Show();
                 app.gameState = GameState::Paused;
+                SyncMusic(app);
             } else if (key == SDLK_F3) {
                 app.showDebugOverlay = !app.showDebugOverlay;
             } else if (key == SDLK_F) {
@@ -657,11 +682,13 @@ static bool HandleInput(AppState& app) {
             } else if (key == SDLK_F5) {
                 app.menu.ShowSave();
                 app.gameState = GameState::Paused;
+                SyncMusic(app);
             } else if (key == SDLK_F9) {
                 app.menu.Show();
                 app.menu.NavigateDown();
                 app.menu.Confirm();
                 app.gameState = GameState::Paused;
+                SyncMusic(app);
             }
         } else if (event.type == SDL_EVENT_MOUSE_WHEEL && app.gameState == GameState::Playing) {
             if (event.wheel.y > 0) {
@@ -956,10 +983,12 @@ static void Update(AppState& app, float deltaSeconds) {
 
     if (!app.player.IsAlive()) {
         app.gameState = GameState::Dead;
+        SyncMusic(app);
     } else if (const ExitTrigger* exit =
                    FindExitTrigger(app.player.Position(), app.map.ExitTriggers())) {
         if (exit->targetLevel == "complete") {
             app.gameState = GameState::LevelComplete;
+            SyncMusic(app);
         } else {
             app.requestedLevelId = exit->targetLevel;
             app.isLevelTransition = true;
@@ -1399,9 +1428,9 @@ int Game::Run(int argc, char* argv[]) {
     SDL_SetWindowRelativeMouseMode(app.window, true);
 
     // --- Audio -----------------------------------------------------------
-    // Init subsystem and start menu music immediately (game opens in Menu state).
+    // Init subsystem; SyncMusic starts menu music (gameState == Menu at startup).
     app.audio.Init();
-    app.audio.PlayMusic(assetDirectory + "/music/MusicProject.wav", 0.7f);
+    SyncMusic(app);
 
     Uint64 lastTicks = SDL_GetTicksNS();
     while (app.running) {
