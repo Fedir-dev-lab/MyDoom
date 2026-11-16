@@ -249,7 +249,7 @@ static void SyncMusic(AppState& app) {
                          app.gameState == GameState::LevelComplete);
     if (inMenu) {
         if (!app.audio.IsPlaying())
-            app.audio.PlayMusic(app.assetDirectory + "/music/MusicProject.wav", 0.7f);
+            app.audio.PlayProceduralMusic(0.7f);
     } else {
         app.audio.StopMusic();
     }
@@ -1428,7 +1428,8 @@ int Game::Run(int argc, char* argv[]) {
     SDL_SetWindowRelativeMouseMode(app.window, true);
 
     // --- Audio -----------------------------------------------------------
-    // Init subsystem; SyncMusic starts menu music (gameState == Menu at startup).
+    // Procedural synthesizer: no external files or audio libraries required.
+    // SyncMusic starts procedural soundtrack if gameState == Menu.
     app.audio.Init();
     SyncMusic(app);
 
