@@ -10,14 +10,14 @@
 namespace {
 
 // ===========================================================================
-//  Audio constants
+//  Acoustic & Audio Engine Constants
 // ===========================================================================
 constexpr float    kPi                = 3.14159265358979323846f;
 constexpr float    kTwoPi             = 2.0f * kPi;
 constexpr int      kSampleRate        = 44100;
 constexpr int      kChannels          = 2;          // stereo
 constexpr int      kChunkFrames       = 512;        // frames per update slice
-constexpr int      kStreamBufferFrames= 8192;       // ~185ms buffer
+constexpr int      kStreamBufferFrames= 8192;       // ~185ms buffer queued
 constexpr int      kMaxVoices         = 24;         // polyphonic SFX voice pool
 
 // ===========================================================================
@@ -35,8 +35,41 @@ struct NoiseGen {
 };
 
 // ===========================================================================
-//  Simple 1-pole Low-Pass Filter
+//  Pink Noise Filter (Voss-McCartney 1/f acoustic modeling)
+//  Simulates realistic air turbulence, gas expansion, and kinetic friction
 // ===========================================================================
+struct PinkFilter {
+    float b0 = 0.0f;
+    float b1 = 0.0f;
+    float b2 = 0.0f;
+
+    float Process(float white) {
+        b0 = 0.99886f * b0 + white * 0.0555179f;
+        b1 = 0.99332f * b1 + white * 0.0750759f;
+        b2 = 0.96900f * b2 + white * 0.1538520f;
+        return (b0 + b1 + b2 + white * 0.5362f) * 0.35f;
+    }
+};
+
+// ===========================================================================
+//  2-Pole State-Variable Resonant Filter (SVF)
+//  Used for vocal tract formants, gun barrel acoustic resonance, and surface thuds
+// ===========================================================================
+struct ResonantFilter {
+    float lp = 0.0f;
+    float bp = 0.0f;
+
+    void Process(float in, float cutoffHz, float q) {
+        float f = 2.0f * std::sin(kPi * cutoffHz / static_cast<float>(kSampleRate));
+        f = std::clamp(f, 0.0005f, 0.95f);
+        float damp = std::clamp(1.0f / q, 0.04f, 2.0f);
+        float hp = in - lp - damp * bp;
+        bp += f * hp;
+        lp += f * bp;
+    }
+};
+
+// Simple 1-pole Low-Pass Filter
 struct OnePoleLP {
     float state = 0.0f;
 
@@ -46,21 +79,45 @@ struct OnePoleLP {
     }
 };
 
+// Nonlinear Acoustic Soft Saturation
+inline float Saturate(float x) {
+    return x / (1.0f + 0.35f * std::abs(x));
+}
+
+// Master limiter
+inline float MasterLimit(float x) {
+    if (x >  1.2f) return 0.95f;
+    if (x < -1.2f) return -0.95f;
+    return x / (1.0f + 0.45f * std::abs(x));
+}
+
 // ===========================================================================
-//  Active SFX Voice
+//  Physical Modeling SFX Voice
 // ===========================================================================
 struct SoundVoice {
-    bool    active      = false;
-    SoundId id          = SoundId::Pistol;
-    float   time        = 0.0f;
-    float   duration    = 0.0f;
-    float   volume      = 1.0f;
-    float   panL        = 0.7f;
-    float   panR        = 0.7f;
-    float   phase1      = 0.0f;
-    float   phase2      = 0.0f;
-    float   filterState = 0.0f;
-    float   customParam = 0.0f;
+    bool           active      = false;
+    SoundId        id          = SoundId::Pistol;
+    float          time        = 0.0f;
+    float          duration    = 0.0f;
+    float          volume      = 1.0f;
+    float          panL        = 0.7f;
+    float          panR        = 0.7f;
+
+    // Oscillators & phase accumulators
+    float          phase1      = 0.0f;
+    float          phase2      = 0.0f;
+    float          phase3      = 0.0f;
+
+    // Dual resonant acoustic filters
+    ResonantFilter resFilt1;
+    ResonantFilter resFilt2;
+    OnePoleLP      onePole1;
+    OnePoleLP      onePole2;
+    PinkFilter     pinkFilt;
+
+    // Micro-variations
+    float          pitchVar    = 1.0f;
+    float          seed        = 0.0f;
 };
 
 // ===========================================================================
@@ -233,16 +290,10 @@ struct ProceduralSynth {
     }
 };
 
-static float SoftLimit(float x) {
-    if (x >  1.2f) return 0.95f;
-    if (x < -1.2f) return -0.95f;
-    return x / (1.0f + 0.4f * std::abs(x));
-}
-
 } // namespace
 
 // ===========================================================================
-//  AudioSystem::Impl
+//  AudioSystem::Impl — Physical Modeling Engine
 // ===========================================================================
 struct AudioSystem::Impl {
     SDL_AudioDeviceID        device = 0;
@@ -255,163 +306,373 @@ struct AudioSystem::Impl {
     float ProcessVoice(SoundVoice& v, float dt) {
         float sample = 0.0f;
         const float curT = v.time;
+        const float rawWhite = sfxNoise.Next();
+        const float pink = v.pinkFilt.Process(rawWhite);
 
         switch (v.id) {
+            // ---------------------------------------------------------------
+            // 1. PISTOL: 10mm Tactical Service Pistol
+            // Stages:
+            //   - 0..3ms: Supersonic primer crack (hard impulse)
+            //   - 3..35ms: Muzzle blast & expanding gas concussion
+            //   - 35..90ms: Barrel cavity resonance (1050 Hz)
+            //   - 60..120ms: Mechanical slide cycle & bolt snap
+            // ---------------------------------------------------------------
             case SoundId::Pistol: {
-                // Punchy tactical shot: pitch plunge + transient pop
-                const float freq = 55.0f + 340.0f * std::exp(-curT * 45.0f);
-                v.phase1 += freq * dt;
+                // Initial supersonic crack
+                const float crackEnv = std::exp(-curT * 120.0f);
+                const float crack = (curT < 0.003f) ? (rawWhite * 1.8f) : (rawWhite * crackEnv * 0.6f);
+
+                // Concussive sub-punch: 240 Hz plunging down to 55 Hz
+                const float subFreq = 55.0f + 210.0f * std::exp(-curT * 40.0f) * v.pitchVar;
+                v.phase1 += subFreq * dt;
                 if (v.phase1 >= 1.0f) v.phase1 -= 1.0f;
-                const float body = std::sin(v.phase1 * kTwoPi) * std::exp(-curT * 26.0f);
-                const float pop  = sfxNoise.Next() * std::exp(-curT * 55.0f) * 0.45f;
-                sample = (body * 0.7f + pop) * 1.5f;
+                const float punch = std::sin(v.phase1 * kTwoPi) * std::exp(-curT * 22.0f);
+
+                // Barrel acoustic resonance (ringing metal cavity ~1050 Hz)
+                v.resFilt1.Process(pink, 1050.0f * v.pitchVar, 4.5f);
+                const float barrelRumble = v.resFilt1.bp * std::exp(-curT * 28.0f);
+
+                // Mechanical slide cycle sound at ~55ms
+                float mechSnap = 0.0f;
+                if (curT >= 0.045f && curT <= 0.085f) {
+                    const float mechT = curT - 0.045f;
+                    v.phase2 += 2200.0f * dt;
+                    if (v.phase2 >= 1.0f) v.phase2 -= 1.0f;
+                    mechSnap = (std::sin(v.phase2 * kTwoPi) * 0.4f + rawWhite * 0.6f) *
+                               std::exp(-mechT * 80.0f) * 0.35f;
+                }
+
+                // Room reflection tail
+                v.onePole1.Process(pink, 0.06f);
+                const float tail = v.onePole1.state * std::exp(-curT * 9.0f) * 0.25f;
+
+                const float rawOut = crack * 0.7f + punch * 0.85f + barrelRumble * 0.75f + mechSnap + tail;
+                sample = Saturate(rawOut * 1.6f);
                 break;
             }
 
+            // ---------------------------------------------------------------
+            // 2. SHOTGUN: 12-Gauge Tactical Combat Shotgun
+            // Stages:
+            //   - 0..15ms: Massive explosive detonation & pressure wave
+            //   - 15..140ms: Sub-bass chest displacement (35 Hz boom)
+            //   - 20..220ms: Dense expanding cloud of gas (turbulent pink noise)
+            //   - 190..270ms: Forend pump racked BACK (slide friction & click)
+            //   - 280..380ms: Forend pump slammed FORWARD (bolt lock battery)
+            // ---------------------------------------------------------------
             case SoundId::Shotgun: {
-                // Heavy explosive blast with sub boom & noise tail
-                const float freq = 35.0f + 185.0f * std::exp(-curT * 11.0f);
-                v.phase1 += freq * dt;
+                // High-pressure detonation shockwave
+                const float shock = (curT < 0.012f) ? Saturate(rawWhite * 2.5f) : 0.0f;
+
+                // Sub-bass chest-slamming concussion: 155 Hz dropping to 32 Hz
+                const float subFreq = 32.0f + 140.0f * std::exp(-curT * 14.0f) * v.pitchVar;
+                v.phase1 += subFreq * dt;
                 if (v.phase1 >= 1.0f) v.phase1 -= 1.0f;
-                const float sub = std::sin(v.phase1 * kTwoPi) * std::exp(-curT * 7.5f);
-                const float n   = sfxNoise.Next() * std::exp(-curT * 12.0f);
-                v.filterState += 0.22f * (n - v.filterState);
-                sample = (sub * 0.85f + v.filterState * 0.95f) * 1.6f;
+                const float subPunch = std::sin(v.phase1 * kTwoPi) * std::exp(-curT * 8.5f);
+
+                // Heavy turbulent gas expansion
+                v.resFilt1.Process(pink, 480.0f * v.pitchVar, 2.5f);
+                const float blast = (v.resFilt1.lp + v.resFilt1.bp * 0.8f) * std::exp(-curT * 9.0f);
+
+                // Atmospheric low-end room boom
+                v.onePole1.Process(subPunch + blast, 0.08f);
+                const float roomRumble = v.onePole1.state * std::exp(-curT * 5.5f);
+
+                // Real Mechanical Pump-Action:
+                // Part A: Rack BACK (~0.18s to 0.26s)
+                float pumpBack = 0.0f;
+                if (curT >= 0.18f && curT <= 0.26f) {
+                    const float pt = curT - 0.18f;
+                    v.phase2 += 1650.0f * dt;
+                    if (v.phase2 >= 1.0f) v.phase2 -= 1.0f;
+                    v.resFilt2.Process(pink, 1400.0f, 3.5f);
+                    pumpBack = (std::sin(v.phase2 * kTwoPi) * 0.35f + v.resFilt2.bp * 0.65f) *
+                               std::exp(-pt * 35.0f) * 0.65f;
+                }
+
+                // Part B: Slam FORWARD into battery (~0.28s to 0.37s)
+                float pumpForward = 0.0f;
+                if (curT >= 0.28f && curT <= 0.37f) {
+                    const float pt = curT - 0.28f;
+                    v.phase3 += 850.0f * dt;
+                    if (v.phase3 >= 1.0f) v.phase3 -= 1.0f;
+                    v.resFilt2.Process(rawWhite, 2400.0f, 4.0f);
+                    pumpForward = (std::sin(v.phase3 * kTwoPi) * 0.5f + v.resFilt2.bp * 0.5f) *
+                                  std::exp(-pt * 40.0f) * 0.85f;
+                }
+
+                const float rawOut = shock * 0.8f + subPunch * 1.1f + blast * 0.9f +
+                                     roomRumble * 0.5f + pumpBack + pumpForward;
+                sample = Saturate(rawOut * 1.55f);
                 break;
             }
 
+            // ---------------------------------------------------------------
+            // 3. CHAINGUN: Motorized Rotary Machine Gun
+            // Fast tungsten kinetic crack + hot muzzle brake gas pressure
+            // ---------------------------------------------------------------
             case SoundId::Chaingun: {
-                // Rapid metallic crack
-                const float freq = 90.0f + 420.0f * std::exp(-curT * 60.0f);
+                // Supersonic shockwave snap
+                const float crack = (curT < 0.005f) ? (rawWhite * 1.6f) : 0.0f;
+
+                // Punch sweep: 460 Hz down to 85 Hz
+                const float freq = 85.0f + 380.0f * std::exp(-curT * 55.0f) * v.pitchVar;
                 v.phase1 += freq * dt;
                 if (v.phase1 >= 1.0f) v.phase1 -= 1.0f;
-                const float env  = std::exp(-curT * 32.0f);
-                const float square = (v.phase1 < 0.5f ? 1.0f : -1.0f) * 0.35f;
-                const float sine   = std::sin(v.phase1 * kTwoPi) * 0.65f;
-                const float crack  = sfxNoise.Next() * std::exp(-curT * 50.0f) * 0.45f;
-                sample = ((square + sine) * env + crack) * 1.5f;
+                const float punch = std::sin(v.phase1 * kTwoPi) * std::exp(-curT * 28.0f);
+
+                // High-pressure muzzle brake gas hiss
+                v.resFilt1.Process(pink, 1850.0f * v.pitchVar, 3.0f);
+                const float brakeGas = v.resFilt1.bp * std::exp(-curT * 38.0f);
+
+                // Metallic rotary bolt clack
+                v.phase2 += 2800.0f * dt;
+                if (v.phase2 >= 1.0f) v.phase2 -= 1.0f;
+                const float clack = std::sin(v.phase2 * kTwoPi) * std::exp(-curT * 60.0f) * 0.35f;
+
+                sample = Saturate((crack * 0.8f + punch * 0.9f + brakeGas * 0.7f + clack) * 1.6f);
                 break;
             }
 
+            // ---------------------------------------------------------------
+            // 4. PLAYER FOOTSTEP: Heavy Armored Combat Boot on Regolith/Grating
+            //   - Heel strike: Low acoustic thud of heavy sole (65-80 Hz)
+            //   - Regolith crunch: High-shelf textured Martian basalt dust
+            //   - Tactical gear jingle: Subtle cloth/holster rustle
+            // ---------------------------------------------------------------
             case SoundId::PlayerStep: {
-                // Boot impact on Martian surface (gravel/metal thud)
-                const float baseF = 85.0f + v.customParam * 14.0f;
-                const float freq  = baseF * std::exp(-curT * 25.0f);
-                v.phase1 += freq * dt;
+                // Heavy heel strike
+                const float heelFreq = (65.0f + v.seed * 12.0f) * std::exp(-curT * 35.0f);
+                v.phase1 += heelFreq * dt;
                 if (v.phase1 >= 1.0f) v.phase1 -= 1.0f;
-                const float thud   = std::sin(v.phase1 * kTwoPi) * std::exp(-curT * 35.0f);
-                const float crunch = sfxNoise.Next() * std::exp(-curT * 50.0f) * 0.25f;
-                sample = (thud * 0.75f + crunch) * 1.1f;
+                const float heelThud = std::sin(v.phase1 * kTwoPi) * std::exp(-curT * 38.0f);
+
+                // Regolith / gravel crunch (bandpass filtered shaped noise)
+                v.resFilt1.Process(pink, 2200.0f + v.seed * 350.0f, 2.2f);
+                const float crunch = v.resFilt1.bp * std::exp(-curT * 42.0f) * 0.65f;
+
+                // Low-end floor resonance
+                v.onePole1.Process(heelThud, 0.15f);
+                const float floorRes = v.onePole1.state * std::exp(-curT * 25.0f) * 0.45f;
+
+                sample = (heelThud * 0.75f + crunch * 0.8f + floorRes) * 1.1f;
                 break;
             }
 
+            // ---------------------------------------------------------------
+            // 5. MONSTER FOOTSTEP (Scout / Shooter): Chitinous Claws
+            //   - Double-tap claw strike (fore-claw then rear-claw)
+            //   - Resonant insectoid carapace tap (1350 Hz & 2700 Hz)
+            // ---------------------------------------------------------------
             case SoundId::MonsterStep: {
-                // Chitinous leg tap/scrape
-                const float freq = 220.0f + 550.0f * std::exp(-curT * 65.0f);
-                v.phase1 += freq * dt;
-                if (v.phase1 >= 1.0f) v.phase1 -= 1.0f;
-                const float tap    = std::sin(v.phase1 * kTwoPi) * std::exp(-curT * 40.0f);
-                const float scrape = sfxNoise.Next() * std::exp(-curT * 55.0f) * 0.25f;
-                sample = (tap * 0.8f + scrape) * 0.9f;
+                // Primary claw tap
+                v.resFilt1.Process(pink, 1350.0f * v.pitchVar, 4.0f);
+                const float tap1 = v.resFilt1.bp * std::exp(-curT * 45.0f);
+
+                // Secondary claw drag/tap at ~18ms
+                float tap2 = 0.0f;
+                if (curT >= 0.016f) {
+                    const float dt2 = curT - 0.016f;
+                    v.resFilt2.Process(rawWhite, 2750.0f * v.pitchVar, 3.5f);
+                    tap2 = v.resFilt2.bp * std::exp(-dt2 * 55.0f) * 0.7f;
+                }
+
+                // Chitin friction scrape
+                v.onePole1.Process(rawWhite, 0.12f);
+                const float scrape = v.onePole1.state * std::exp(-curT * 40.0f) * 0.35f;
+
+                sample = (tap1 * 0.8f + tap2 * 0.6f + scrape) * 1.2f;
                 break;
             }
 
+            // ---------------------------------------------------------------
+            // 6. MONSTER FOOTSTEP HEAVY (Tank): Multi-Ton Seismic Stomp
+            //   - 32 Hz ground vibration
+            //   - Grinding stone / crushed metal grating
+            // ---------------------------------------------------------------
             case SoundId::MonsterStepHeavy: {
-                // Heavy Tank stomp
-                const float freq = 42.0f + 110.0f * std::exp(-curT * 22.0f);
-                v.phase1 += freq * dt;
+                // Seismic floor shake (32 Hz)
+                const float stompFreq = 34.0f * std::exp(-curT * 12.0f);
+                v.phase1 += stompFreq * dt;
                 if (v.phase1 >= 1.0f) v.phase1 -= 1.0f;
-                const float thud = std::sin(v.phase1 * kTwoPi) * std::exp(-curT * 14.0f);
-                sample = thud * 1.3f;
+                const float sub = std::sin(v.phase1 * kTwoPi) * std::exp(-curT * 11.0f);
+
+                // Crushing debris & mass impact
+                v.resFilt1.Process(pink, 220.0f, 2.0f);
+                const float massCrunch = v.resFilt1.lp * std::exp(-curT * 16.0f);
+
+                sample = Saturate((sub * 1.1f + massCrunch * 0.9f) * 1.4f);
                 break;
             }
 
+            // ---------------------------------------------------------------
+            // 7. MONSTER ALERT / ROAR: Mantis Predatory Screech
+            //   - Glottal pulse train passing through dual throat formant filters:
+            //     F1 ~650 Hz (guttural chest), F2 ~1850 Hz (chitin mandible shriek)
+            //   - Stridulation mandible chatter (55 Hz modulation)
+            //   - Predatory lung hiss
+            // ---------------------------------------------------------------
             case SoundId::MonsterAlert: {
-                // Alien Mantis screech / battle hiss (FM synthesis)
-                v.phase2 += 48.0f * dt;
-                if (v.phase2 >= 1.0f) v.phase2 -= 1.0f;
-                const float mod = std::sin(v.phase2 * kTwoPi) * 3.6f;
+                // Glottal fundamental pitch envelope: starts low, spikes up aggressively
+                const float progress = curT / v.duration;
+                const float pitchCurve = std::sin(progress * kPi);
+                const float f0 = (110.0f + 160.0f * pitchCurve) * v.pitchVar;
 
-                const float carFreq = 320.0f + 180.0f * std::sin(curT * (kPi / v.duration));
-                v.phase1 += carFreq * dt;
+                // Glottal buzz pulse train
+                v.phase1 += f0 * dt;
                 if (v.phase1 >= 1.0f) v.phase1 -= 1.0f;
+                const float glottal = (v.phase1 < 0.25f) ? (1.0f - v.phase1 * 4.0f) : -0.25f;
 
-                const float env     = std::sin(curT * (kPi / v.duration));
-                const float screech = std::sin(v.phase1 * kTwoPi + mod);
-                const float hiss    = sfxNoise.Next() * 0.35f;
-                sample = (screech * 0.7f + hiss) * env * 1.4f;
+                // Mandible stridulation chatter (55 Hz amplitude flutter)
+                v.phase2 += 55.0f * dt;
+                if (v.phase2 >= 1.0f) v.phase2 -= 1.0f;
+                const float chatter = 0.65f + 0.35f * std::sin(v.phase2 * kTwoPi);
+
+                // Vocal tract Formant 1 (~680 Hz - guttural cavity)
+                v.resFilt1.Process(glottal * chatter, 680.0f * v.pitchVar, 3.8f);
+
+                // Vocal tract Formant 2 (~1900 Hz - piercing screech cavity)
+                v.resFilt2.Process(glottal * chatter, 1900.0f * v.pitchVar, 4.5f);
+
+                // Harsh predatory air hiss
+                v.onePole1.Process(rawWhite, 0.25f);
+                const float hiss = v.onePole1.state * pitchCurve * 0.45f;
+
+                const float vocalSound = (v.resFilt1.bp * 0.9f + v.resFilt2.bp * 0.7f + hiss) * pitchCurve;
+                sample = Saturate(vocalSound * 1.55f);
                 break;
             }
 
+            // ---------------------------------------------------------------
+            // 8. MONSTER ATTACK (Scout): Razor Blade Whoosh & Visceral Snap
+            // ---------------------------------------------------------------
             case SoundId::MonsterAttackScout: {
-                // Razor slash whoosh + bite snap
-                v.phase1 += (140.0f + 550.0f * std::exp(-curT * 28.0f)) * dt;
-                if (v.phase1 >= 1.0f) v.phase1 -= 1.0f;
-                const float snap   = std::sin(v.phase1 * kTwoPi) * std::exp(-curT * 18.0f);
-                const float whoosh = sfxNoise.Next() * std::sin(curT * (kPi / v.duration)) * 0.5f;
-                sample = (snap * 0.75f + whoosh) * 1.35f;
+                const float progress = curT / v.duration;
+                // Aerodynamic cutting whoosh (sweeping bandpass noise)
+                const float whooshFreq = 3200.0f - 2400.0f * progress;
+                v.resFilt1.Process(pink, whooshFreq, 2.8f);
+                const float whoosh = v.resFilt1.bp * std::sin(progress * kPi);
+
+                // Sharp cutting snap at midpoint
+                float snap = 0.0f;
+                if (curT >= 0.06f && curT <= 0.16f) {
+                    const float st = curT - 0.06f;
+                    v.phase1 += (180.0f + 650.0f * std::exp(-st * 30.0f)) * dt;
+                    if (v.phase1 >= 1.0f) v.phase1 -= 1.0f;
+                    snap = std::sin(v.phase1 * kTwoPi) * std::exp(-st * 25.0f) * 0.9f;
+                }
+
+                sample = Saturate((whoosh * 1.1f + snap * 0.85f) * 1.4f);
                 break;
             }
 
+            // ---------------------------------------------------------------
+            // 9. MONSTER ATTACK (Tank): Earth-Shattering Claw Smash
+            // ---------------------------------------------------------------
             case SoundId::MonsterAttackTank: {
-                // Guttural roar & crushing ground smash
-                v.phase2 += 26.0f * dt;
-                if (v.phase2 >= 1.0f) v.phase2 -= 1.0f;
-                const float mod = std::sin(v.phase2 * kTwoPi) * 2.8f;
-
-                const float smashF = 35.0f + 115.0f * std::exp(-curT * 12.0f);
-                v.phase1 += smashF * dt;
+                // Sub-concussion wave (38 Hz)
+                const float subFreq = 38.0f + 95.0f * std::exp(-curT * 12.0f);
+                v.phase1 += subFreq * dt;
                 if (v.phase1 >= 1.0f) v.phase1 -= 1.0f;
+                const float sub = std::sin(v.phase1 * kTwoPi) * std::exp(-curT * 8.0f);
 
-                const float roar  = std::sin(v.phase1 * kTwoPi + mod) * 0.55f;
-                const float smash = std::sin(v.phase1 * kTwoPi) * 0.75f;
-                sample = (roar + smash) * std::exp(-curT * 4.5f) * 1.5f;
-                break;
-            }
-
-            case SoundId::MonsterAttackShooter: {
-                // Acid spit projectile launch (bubbling chirp + squelch)
-                const float chirp = 190.0f + 620.0f * std::exp(-curT * 14.0f) +
-                                    45.0f * std::sin(curT * 60.0f);
-                v.phase1 += chirp * dt;
-                if (v.phase1 >= 1.0f) v.phase1 -= 1.0f;
-                const float env   = std::sin(curT * (kPi / v.duration));
-                const float splat = sfxNoise.Next() * 0.3f * env;
-                sample = (std::sin(v.phase1 * kTwoPi) * 0.8f + splat) * env * 1.3f;
-                break;
-            }
-
-            case SoundId::MonsterHurt: {
-                // Pain shriek (rapid FM modulation)
+                // Guttural war growl
                 v.phase2 += 75.0f * dt;
                 if (v.phase2 >= 1.0f) v.phase2 -= 1.0f;
-                const float mod = std::sin(v.phase2 * kTwoPi) * 2.6f;
+                v.resFilt1.Process(std::sin(v.phase2 * kTwoPi), 380.0f, 3.2f);
+                const float growl = v.resFilt1.bp * std::exp(-curT * 6.5f);
 
-                const float carF = 520.0f + 70.0f * std::sin(curT * 85.0f);
-                v.phase1 += carF * dt;
-                if (v.phase1 >= 1.0f) v.phase1 -= 1.0f;
+                // Heavy ground pulverization noise
+                v.resFilt2.Process(pink, 280.0f, 1.8f);
+                const float shatter = v.resFilt2.lp * std::exp(-curT * 10.0f);
 
-                const float env = std::exp(-curT * 16.0f);
-                sample = std::sin(v.phase1 * kTwoPi + mod) * env * 1.4f;
+                sample = Saturate((sub * 1.15f + growl * 0.6f + shatter * 0.85f) * 1.5f);
                 break;
             }
 
-            case SoundId::MonsterDeath: {
-                // Dying descent screech & squelch
-                const float progress = std::clamp(curT / v.duration, 0.0f, 1.0f);
-                const float env = 1.0f - progress;
-                const float freq = 45.0f + 360.0f * env;
+            // ---------------------------------------------------------------
+            // 10. MONSTER ATTACK (Shooter): Wet Acidic Spit Launch
+            // Pressurized throat contraction -> bubbling acidic discharge
+            // ---------------------------------------------------------------
+            case SoundId::MonsterAttackShooter: {
+                const float progress = curT / v.duration;
+                const float env = std::sin(progress * kPi);
 
-                v.phase2 += 35.0f * dt;
+                // Bubbling acid throat chirp (FM pitch modulation)
+                v.phase2 += 42.0f * dt;
                 if (v.phase2 >= 1.0f) v.phase2 -= 1.0f;
-                const float mod = std::sin(v.phase2 * kTwoPi) * (1.8f * env);
+                const float bubbleMod = std::sin(v.phase2 * kTwoPi) * 90.0f;
 
-                v.phase1 += freq * dt;
+                const float chirpFreq = 220.0f + 640.0f * std::exp(-curT * 12.0f) + bubbleMod;
+                v.phase1 += chirpFreq * dt;
                 if (v.phase1 >= 1.0f) v.phase1 -= 1.0f;
 
-                const float screech = std::sin(v.phase1 * kTwoPi + mod) * env;
-                const float rumble  = sfxNoise.Next() * 0.25f * env;
-                sample = (screech * 0.75f + rumble) * 1.4f;
+                // Wet fluid splat
+                v.resFilt1.Process(pink, 950.0f, 3.0f);
+                const float splat = v.resFilt1.bp * env * 0.7f;
+
+                const float spit = std::sin(v.phase1 * kTwoPi) * env * 0.75f;
+                sample = Saturate((spit + splat) * 1.4f);
+                break;
+            }
+
+            // ---------------------------------------------------------------
+            // 11. MONSTER HURT: Piercing Insectoid Pain Shriek
+            // Chitin shell cracking under ballistic impact + agonized vocal screech
+            // ---------------------------------------------------------------
+            case SoundId::MonsterHurt: {
+                // Ballistic chitin crack (0..8ms)
+                const float crack = (curT < 0.008f) ? (rawWhite * 1.7f) : 0.0f;
+
+                // High distressed alien vocal screech
+                const float progress = curT / v.duration;
+                const float env = std::exp(-curT * 14.0f);
+
+                v.phase2 += 80.0f * dt;
+                if (v.phase2 >= 1.0f) v.phase2 -= 1.0f;
+                const float screamMod = std::sin(v.phase2 * kTwoPi) * 180.0f;
+
+                const float screamFreq = 580.0f + 250.0f * std::sin(progress * kPi) + screamMod;
+                v.phase1 += screamFreq * dt;
+                if (v.phase1 >= 1.0f) v.phase1 -= 1.0f;
+
+                v.resFilt1.Process(std::sin(v.phase1 * kTwoPi), 1850.0f, 3.5f);
+                const float shriek = v.resFilt1.bp * env;
+
+                sample = Saturate((crack * 0.75f + shriek * 1.1f) * 1.4f);
+                break;
+            }
+
+            // ---------------------------------------------------------------
+            // 12. MONSTER DEATH: Descending Death Shriek & Carcass Collapse
+            // ---------------------------------------------------------------
+            case SoundId::MonsterDeath: {
+                const float progress = std::clamp(curT / v.duration, 0.0f, 1.0f);
+                const float env = 1.0f - progress;
+
+                // Descending death shriek
+                const float shriekFreq = 48.0f + 420.0f * std::pow(env, 1.8f);
+                v.phase2 += 36.0f * dt;
+                if (v.phase2 >= 1.0f) v.phase2 -= 1.0f;
+                const float deathMod = std::sin(v.phase2 * kTwoPi) * (140.0f * env);
+
+                v.phase1 += (shriekFreq + deathMod) * dt;
+                if (v.phase1 >= 1.0f) v.phase1 -= 1.0f;
+
+                v.resFilt1.Process(std::sin(v.phase1 * kTwoPi), 950.0f * env + 120.0f, 3.0f);
+                const float dyingVoice = v.resFilt1.bp * env;
+
+                // Carcass impact thud as it falls onto the ground (at ~0.25s)
+                float bodyFall = 0.0f;
+                if (curT >= 0.22f) {
+                    const float ft = curT - 0.22f;
+                    v.phase3 += 42.0f * dt;
+                    if (v.phase3 >= 1.0f) v.phase3 -= 1.0f;
+                    bodyFall = std::sin(v.phase3 * kTwoPi) * std::exp(-ft * 12.0f) * 0.9f;
+                }
+
+                sample = Saturate((dyingVoice * 1.1f + bodyFall) * 1.45f);
                 break;
             }
         }
@@ -478,11 +739,11 @@ bool AudioSystem::Init() {
     m_paused      = false;
     m_musicActive = false;
 
-    // Fill initial buffer so playback is immediate
+    // Pre-seed buffer & unpause device
     Tick();
     SDL_ResumeAudioDevice(m_impl->device);
 
-    SDL_Log("[Audio] Subsystem ready (procedural music & SFX).");
+    SDL_Log("[Audio] Procedural acoustic modeling audio engine ready.");
     return true;
 }
 
@@ -491,7 +752,6 @@ bool AudioSystem::PlayProceduralMusic(float volume) {
     m_musicActive = true;
     m_volume      = std::clamp(volume, 0.0f, 1.0f);
     m_impl->musicSynth = ProceduralSynth{};
-    SDL_Log("[Audio] Procedural music started.");
     return true;
 }
 
@@ -517,26 +777,25 @@ void AudioSystem::PlaySound(SoundId id, float volume, float pan) {
     if (!m_running || !m_impl) return;
 
     pan = std::clamp(pan, -1.0f, 1.0f);
-    // Constant-power panning
-    const float panAngle = (pan + 1.0f) * 0.25f * kPi; // [0, PI/2]
+    const float panAngle = (pan + 1.0f) * 0.25f * kPi;
     const float panL = std::cos(panAngle);
     const float panR = std::sin(panAngle);
 
-    // Duration table per sound
+    // Duration table per physically modeled sound
     float duration = 0.2f;
     switch (id) {
-        case SoundId::Pistol:              duration = 0.16f; break;
-        case SoundId::Shotgun:             duration = 0.45f; break;
-        case SoundId::Chaingun:            duration = 0.12f; break;
-        case SoundId::PlayerStep:          duration = 0.09f; break;
-        case SoundId::MonsterStep:         duration = 0.08f; break;
-        case SoundId::MonsterStepHeavy:    duration = 0.18f; break;
-        case SoundId::MonsterAlert:        duration = 0.38f; break;
-        case SoundId::MonsterAttackScout:  duration = 0.24f; break;
-        case SoundId::MonsterAttackTank:   duration = 0.45f; break;
-        case SoundId::MonsterAttackShooter:duration = 0.30f; break;
-        case SoundId::MonsterHurt:         duration = 0.18f; break;
-        case SoundId::MonsterDeath:        duration = 0.55f; break;
+        case SoundId::Pistol:              duration = 0.20f; break;
+        case SoundId::Shotgun:             duration = 0.48f; break;
+        case SoundId::Chaingun:            duration = 0.14f; break;
+        case SoundId::PlayerStep:          duration = 0.10f; break;
+        case SoundId::MonsterStep:         duration = 0.09f; break;
+        case SoundId::MonsterStepHeavy:    duration = 0.22f; break;
+        case SoundId::MonsterAlert:        duration = 0.42f; break;
+        case SoundId::MonsterAttackScout:  duration = 0.26f; break;
+        case SoundId::MonsterAttackTank:   duration = 0.48f; break;
+        case SoundId::MonsterAttackShooter:duration = 0.32f; break;
+        case SoundId::MonsterHurt:         duration = 0.20f; break;
+        case SoundId::MonsterDeath:        duration = 0.60f; break;
     }
 
     // Voice allocation: find first inactive voice, or steal the oldest
@@ -564,8 +823,17 @@ void AudioSystem::PlaySound(SoundId id, float volume, float pan) {
         v.panR        = panR;
         v.phase1      = 0.0f;
         v.phase2      = 0.0f;
-        v.filterState = 0.0f;
-        v.customParam = (id == SoundId::PlayerStep) ? (std::rand() % 2 == 0 ? 0.0f : 1.0f) : 0.0f;
+        v.phase3      = 0.0f;
+        v.resFilt1    = ResonantFilter{};
+        v.resFilt2    = ResonantFilter{};
+        v.onePole1    = OnePoleLP{};
+        v.onePole2    = OnePoleLP{};
+        v.pinkFilt    = PinkFilter{};
+
+        // Subtle realistic pitch variance (+- 4%)
+        const float r = (static_cast<float>(m_impl->sfxNoise.state & 0xFFu) / 255.0f);
+        v.pitchVar    = 0.96f + 0.08f * r;
+        v.seed        = r;
     }
 }
 
@@ -575,16 +843,16 @@ void AudioSystem::PlaySpatialSound(SoundId id, const Vector3& emitterPos,
     const float dx = emitterPos.x - listenerPos.x;
     const float dz = emitterPos.z - listenerPos.z;
     const float distSq = dx * dx + dz * dz;
-    constexpr float kMaxDist = 32.0f;
+    constexpr float kMaxDist = 34.0f;
     if (distSq > kMaxDist * kMaxDist) return;
 
     const float dist = std::sqrt(distSq);
-    // Realistic distance attenuation: 1.0 at 0m, ~0.5 at 6m, ~0.2 at 20m
-    const float distGain = 1.0f / (1.0f + dist * 0.14f);
+    // Physically-based inverse distance attenuation
+    const float distGain = 1.0f / (1.0f + dist * 0.13f);
     const float vol = baseVolume * distGain;
-    if (vol < 0.01f) return;
+    if (vol < 0.008f) return;
 
-    // Stereo panning based on listener's yaw
+    // Stereo panning based on listener's local orientation
     const float rightX = std::cos(listenerAngle);
     const float rightZ = -std::sin(listenerAngle);
     const float dotRight = (dist > 0.001f) ? (dx * rightX + dz * rightZ) / dist : 0.0f;
@@ -621,8 +889,8 @@ void AudioSystem::Tick() {
             const float totalL = (m_musicActive ? musicL * m_volume : 0.0f) + sfxL;
             const float totalR = (m_musicActive ? musicR * m_volume : 0.0f) + sfxR;
 
-            m_impl->buffer[i * 2 + 0] = SoftLimit(totalL * 1.2f);
-            m_impl->buffer[i * 2 + 1] = SoftLimit(totalR * 1.2f);
+            m_impl->buffer[i * 2 + 0] = MasterLimit(totalL);
+            m_impl->buffer[i * 2 + 1] = MasterLimit(totalR);
         }
 
         SDL_PutAudioStreamData(m_impl->stream,
