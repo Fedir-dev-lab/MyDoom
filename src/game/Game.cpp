@@ -34,6 +34,7 @@
 #include "ui/Hud.h"
 #include "ui/Menu.h"
 #include "ui/Phone.h"
+#include "audio/AudioSystem.h"
 #include "weapons/Weapon.h"
 #include "world/Map.h"
 #include "world/DemoLevel.h"
@@ -133,6 +134,9 @@ struct AppState {
     SDL_Renderer* sdlRenderer   = nullptr;
     SDL_Texture*  screenTexture = nullptr;
 
+    // Audio
+    AudioSystem audio;
+
     // Render context (heap-allocated so it can be replaced without moving AppState)
     std::unique_ptr<RenderContext> rc;
 
@@ -219,6 +223,7 @@ static bool RebuildRenderContext(AppState& app, int renderWidth) {
 // the same cleanup sequence as normal shutdown.
 // ---------------------------------------------------------------------------
 static void DestroyApp(AppState& app) {
+    app.audio.Shutdown();
     if (app.screenTexture) {
         SDL_DestroyTexture(app.screenTexture);
         app.screenTexture = nullptr;
@@ -1291,7 +1296,6 @@ int Game::Run(int argc, char* argv[]) {
         SDL_Log("SDL_Init failed: %s", SDL_GetError());
         return 1;
     }
-
     std::string prefPath;
     char* saveDirectory = SDL_GetPrefPath("Fedir", "MyDoomEngine");
     if (!saveDirectory) {
@@ -1394,12 +1398,18 @@ int Game::Run(int argc, char* argv[]) {
 
     SDL_SetWindowRelativeMouseMode(app.window, true);
 
+    // --- Audio -----------------------------------------------------------
+    // Init subsystem and start menu music immediately (game opens in Menu state).
+    app.audio.Init();
+    app.audio.PlayMusic(assetDirectory + "/music/MusicProject.wav", 0.7f);
+
     Uint64 lastTicks = SDL_GetTicksNS();
     while (app.running) {
         const Uint64 now = SDL_GetTicksNS();
         const float dt   = static_cast<float>(now - lastTicks) / 1e9f;
         lastTicks = now;
 
+        app.audio.Tick();   // keep looping stream filled
         app.running = HandleInput(app);
         Update(app, dt);
         Render(app);
