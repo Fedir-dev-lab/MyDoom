@@ -30,6 +30,7 @@
 #include "renderer/TerrainRenderer.h"
 #include "renderer/Texture.h"
 #include "renderer/WallRenderer.h"
+#include "renderer/Frustum.h"
 #include "ui/DebugOverlay.h"
 #include "ui/Hud.h"
 #include "ui/Menu.h"
@@ -171,6 +172,8 @@ struct AppState {
     std::string assetDirectory;
     std::string currentLevelId = "demo";
     std::string requestedLevelId;
+    std::string userMusicDirectory;
+    std::string soundtrackProfilePath;
     std::optional<SaveData> pendingLoad;
     int  pendingLoadSlot = -1;
     bool isLevelTransition = false;
@@ -543,6 +546,32 @@ static bool HandleInput(AppState& app) {
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
         if (event.type == SDL_EVENT_QUIT) { return false; }
+
+        // Drag & Drop: allow player to drop ANY .wav file onto the game window
+        if (event.type == SDL_EVENT_DROP_FILE) {
+            const char* droppedPath = event.drop.data;
+            if (droppedPath) {
+                SDL_Log("[Soundtrack] File dropped: %s", droppedPath);
+                const std::string pathStr(droppedPath);
+                if (pathStr.size() >= 4 &&
+                    (pathStr.compare(pathStr.size() - 4, 4, ".wav") == 0 ||
+                     pathStr.compare(pathStr.size() - 4, 4, ".WAV") == 0)) {
+                    if (app.audio.ConvertAndApplyWav(pathStr)) {
+                        const auto& prof = app.audio.GetSoundtrackProfile();
+                        if (!app.soundtrackProfilePath.empty()) {
+                            SoundtrackConverter::SaveProfile(app.soundtrackProfilePath, prof);
+                        }
+                        app.menu.SetSoundtrackInfo(prof.name, static_cast<int>(prof.bpm), true, prof.statusMessage);
+                        app.hud.ShowMessage("CUSTOM SOUNDTRACK APPLIED");
+                    } else {
+                        app.hud.ShowMessage("CONVERSION FAILED (INVALID WAV)");
+                    }
+                } else {
+                    app.hud.ShowMessage("ONLY .WAV AUDIO FILES SUPPORTED");
+                }
+            }
+            continue;
+        }
 
         if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat) {
             const SDL_Keycode key = event.key.key;
@@ -1117,6 +1146,24 @@ static void Render(AppState& app) {
         return position;
     };
 
+    // -----------------------------------------------------------------------
+    // Build frustum once per frame from the current camera.
+    // Used to cull sprites, enemies, pickups, projectiles, mesh objects, etc.
+    // Walls and planes use their own per-column/tile rejection; not culled here.
+    // -----------------------------------------------------------------------
+    Frustum frustum;
+    frustum.Build(cam);
+    CullStats cullStats;
+
+    // Helper: test a bounding sphere against the 6 frustum planes.
+    // Returns true (and bumps visible counter) when the object should be drawn.
+    const auto SphereVisible = [&](const Vector3& pos, float radius) -> bool {
+        ++cullStats.total;
+        if (frustum.TestSphere(pos, radius)) { ++cullStats.visible; return true; }
+        ++cullStats.culled;
+        return false;
+    };
+
     const std::vector<PointLight>& lights = app.map.PointLights();
     const DirectionalLight sunLight = DirectionalLight::FromAngles(
         app.sunWorldAngle, app.sunElevation);
@@ -1192,6 +1239,8 @@ static void Render(AppState& app) {
                 static_cast<uint8_t>(std::min(255.f, body.cb * 255.f * boost)));
             const Vector3 pos{ body.pos.x, body.pos.y, body.pos.z };
             const Vector3 half{ body.half.x, body.half.y, body.half.z };
+            const float bodyR = std::sqrt(half.x * half.x + half.y * half.y + half.z * half.z);
+            if (!SphereVisible(pos, bodyR)) { continue; }
             rc.meshRenderer.DrawMeshOBB(fb, cam, pos, body.R.m, half,
                 col, activeLights, 0.4f, sunLight);
         }
@@ -1220,6 +1269,9 @@ static void Render(AppState& app) {
         static const Mesh kCube = MakeCube(1.0f);  // unit cube, scaled per object
         const uint32_t kMeshColor = Framebuffer::MakeColor(190, 140, 100);
         for (const MeshObjectDef& obj : app.map.MeshObjects()) {
+            // Bounding sphere radius: half-diagonal of a unit cube * scale.
+            const float meshR = obj.scale * 0.87f; // sqrt(3)/2 ≈ 0.866
+            if (!SphereVisible(obj.position, meshR)) { continue; }
             rc.meshRenderer.DrawMesh(fb, cam,
                 obj.position, obj.yaw, obj.scale, kCube, kMeshColor,
                 activeLights, 0.15f, sunLight);
@@ -1229,6 +1281,12 @@ static void Render(AppState& app) {
     constexpr float kOutAmb = 0.4f, kInAmb = 0.15f;
 
     for (const WorldSprite& sprite : app.map.Sprites()) {
+        // Use half-diagonal of sprite as bounding radius.
+        const float sprR = std::sqrt(sprite.width * sprite.width +
+                                     sprite.height * sprite.height) * 0.5f;
+        const Vector3 sprPos = GroundedPosition(sprite.position);
+        if (!SphereVisible(sprPos, sprR)) { continue; }
+
         const Texture* tex = &app.assets.GetTexture(TextureId::Lamp);
         float amb          = kOutAmb;
         const DirectionalLight* spriteSun = &sunLight;
@@ -1244,14 +1302,16 @@ static void Render(AppState& app) {
             case SpriteType::Bookshelf: tex = &app.assets.GetTexture(TextureId::Bookshelf); amb = kInAmb; spriteSun = &noSun; break;
         }
         rc.spriteRenderer.DrawSprite(fb, cam,
-            GroundedPosition(sprite.position), sprite.width, sprite.height,
+            sprPos, sprite.width, sprite.height,
             activeLights, amb, *spriteSun, *tex);
     }
 
     for (const Pickup& p : app.map.Pickups()) {
         if (!p.collected) {
+            const Vector3 pPos = GroundedPosition(p.position);
+            if (!SphereVisible(pPos, 0.7f)) { continue; }
             rc.spriteRenderer.DrawSprite(fb, cam,
-                GroundedPosition(p.position), 0.8f, 0.8f, activeLights, kOutAmb,
+                pPos, 0.8f, 0.8f, activeLights, kOutAmb,
                 shadowsOn ? sunLight : noSun,
                 p.healthAmount > 0 ? app.assets.GetTexture(TextureId::Medkit)
                                    : app.assets.GetTexture(TextureId::Ammo));
@@ -1283,6 +1343,11 @@ static void Render(AppState& app) {
         }
 
         const Vector3 groundedEnemyPosition = GroundedPosition(e.Position());
+
+        // Use Enemy::Radius() + sprite size margin as the culling sphere.
+        const float cullR = e.Radius() + std::max(width, height) * 0.6f;
+        if (!SphereVisible(groundedEnemyPosition, cullR)) { continue; }
+
         if (!e.IsAlive()) {
             rc.spriteRenderer.DrawSprite(fb, cam,
                 groundedEnemyPosition, corpseWidth, corpseHeight, activeLights, kInAmb, noSun,
@@ -1295,6 +1360,7 @@ static void Render(AppState& app) {
     }
 
     for (const Projectile& p : app.projectiles) {
+        if (!SphereVisible(p.position, p.radius + 0.3f)) { continue; }
         rc.spriteRenderer.DrawSprite(fb, cam,
             p.position, 0.45f, 0.45f, activeLights, 1.0f, noSun,
             app.assets.GetTexture(TextureId::Projectile));
@@ -1307,8 +1373,11 @@ static void Render(AppState& app) {
         Vector3 gatePosition{
             (trigger.minX + trigger.maxX) * 0.5f, 0.0f,
             (trigger.minZ + trigger.maxZ) * 0.5f};
+        const float gateW = trigger.maxX - trigger.minX;
+        const Vector3 groundedGatePos = GroundedPosition(gatePosition);
+        if (!SphereVisible(groundedGatePos, std::sqrt(gateW * gateW + 16.0f) * 0.5f)) { continue; }
         rc.spriteRenderer.DrawSprite(fb, cam,
-            GroundedPosition(gatePosition), trigger.maxX - trigger.minX, 4.0f,
+            groundedGatePos, gateW, 4.0f,
             activeLights, 1.0f, noSun,
             app.assets.GetTexture(TextureId::ExitGate));
     }
@@ -1316,6 +1385,8 @@ static void Render(AppState& app) {
     for (const KeyPickupDef& keyDef : app.map.GetLevelData().keys) {
         const KeyState* ks = app.levelState.FindKey(keyDef.keyId);
         if (ks && ks->collected) { continue; }
+        const Vector3 groundedKeyPos = GroundedPosition(keyDef.position);
+        if (!SphereVisible(groundedKeyPos, 0.6f)) { continue; }
         TextureId texId = TextureId::KeyRed;
         switch (keyDef.colour) {
             case KeyColour::Red:    texId = TextureId::KeyRed; break;
@@ -1324,7 +1395,7 @@ static void Render(AppState& app) {
             default: break;
         }
         rc.spriteRenderer.DrawSprite(fb, cam,
-            GroundedPosition(keyDef.position), 0.5f, 0.7f, activeLights,
+            groundedKeyPos, 0.5f, 0.7f, activeLights,
             kInAmb, noSun, app.assets.GetTexture(texId));
     }
 
@@ -1355,7 +1426,8 @@ static void Render(AppState& app) {
         app.debugOverlay.Draw(fb, app.framesPerSecond,
             app.player.Position(), app.player.Angle(),
             app.player.Health(),
-            static_cast<int>(app.map.Sectors().size()), app.map.WallCount());
+            static_cast<int>(app.map.Sectors().size()), app.map.WallCount(),
+            cullStats);
     }
 
     if (app.gameState == GameState::Menu || app.gameState == GameState::Paused) {

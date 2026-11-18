@@ -6,11 +6,19 @@
 
 class Framebuffer;
 
+// Frustum culling statistics for a single frame.
+struct CullStats {
+    int total   = 0;
+    int visible = 0;
+    int culled  = 0;
+};
+
 class DebugOverlay {
 public:
     void Draw(Framebuffer& framebuffer, float framesPerSecond,
               const Vector3& playerPosition, float playerAngleRadians,
-              int health, int sectorCount, int wallCount) const;
+              int health, int sectorCount, int wallCount,
+              const CullStats& cullStats = {}) const;
     void DrawRestartPrompt(Framebuffer& framebuffer) const;
     void DrawLevelComplete(Framebuffer& framebuffer) const;
 

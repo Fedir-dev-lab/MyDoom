@@ -41,6 +41,10 @@ public:
     // Returns false if file cannot be read or is invalid.
     static bool ConvertWav(const std::string& wavPath, SoundtrackProfile& outProfile);
 
+    // Save/Load profile to/from disk (for persistence in user preferences directory)
+    static bool SaveProfile(const std::string& filePath, const SoundtrackProfile& profile);
+    static bool LoadProfile(const std::string& filePath, SoundtrackProfile& outProfile);
+
     // Creates the default built-in Mars Ambient profile.
     static SoundtrackProfile DefaultProfile();
 };

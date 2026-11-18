@@ -376,3 +376,59 @@ bool SoundtrackConverter::ConvertWav(const std::string& wavPath, SoundtrackProfi
 
     return true;
 }
+
+bool SoundtrackConverter::SaveProfile(const std::string& filePath, const SoundtrackProfile& profile) {
+    std::ofstream out(filePath);
+    if (!out.is_open()) return false;
+    out << "NAME " << profile.name << "\n";
+    out << "BPM " << profile.bpm << "\n";
+    out << "SUBBASS " << profile.subBassFreq << "\n";
+    out << "CUSTOM " << (profile.isCustom ? 1 : 0) << "\n";
+    for (int sec = 0; sec < 4; ++sec) {
+        out << "CHORD " << sec << " "
+            << profile.chords[sec][0] << " "
+            << profile.chords[sec][1] << " "
+            << profile.chords[sec][2] << " "
+            << profile.chords[sec][3] << "\n";
+    }
+    out << "ARP ";
+    for (int i = 0; i < 16; ++i) {
+        out << profile.arpNotes[i] << " ";
+    }
+    out << "\n";
+    out << "STATUS " << profile.statusMessage << "\n";
+    return true;
+}
+
+bool SoundtrackConverter::LoadProfile(const std::string& filePath, SoundtrackProfile& outProfile) {
+    std::ifstream in(filePath);
+    if (!in.is_open()) return false;
+    std::string token;
+    while (in >> token) {
+        if (token == "NAME") {
+            std::getline(in >> std::ws, outProfile.name);
+        } else if (token == "BPM") {
+            in >> outProfile.bpm;
+        } else if (token == "SUBBASS") {
+            in >> outProfile.subBassFreq;
+        } else if (token == "CUSTOM") {
+            int c = 0; in >> c;
+            outProfile.isCustom = (c != 0);
+        } else if (token == "CHORD") {
+            int sec = 0; in >> sec;
+            if (sec >= 0 && sec < 4) {
+                in >> outProfile.chords[sec][0]
+                   >> outProfile.chords[sec][1]
+                   >> outProfile.chords[sec][2]
+                   >> outProfile.chords[sec][3];
+            }
+        } else if (token == "ARP") {
+            for (int i = 0; i < 16; ++i) {
+                in >> outProfile.arpNotes[i];
+            }
+        } else if (token == "STATUS") {
+            std::getline(in >> std::ws, outProfile.statusMessage);
+        }
+    }
+    return true;
+}

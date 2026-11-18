@@ -70,7 +70,8 @@ Glyph GetGlyph(char character) {
 
 void DebugOverlay::Draw(Framebuffer& framebuffer, float framesPerSecond,
                         const Vector3& playerPosition, float playerAngleRadians,
-                        int health, int sectorCount, int wallCount) const {
+                        int health, int sectorCount, int wallCount,
+                        const CullStats& cullStats) const {
     char line[64];
     const uint32_t textColor = Framebuffer::MakeColor(220, 240, 220);
 
@@ -78,7 +79,7 @@ void DebugOverlay::Draw(Framebuffer& framebuffer, float framesPerSecond,
     const float sf = static_cast<float>(framebuffer.Width()) / 640.0f;
     const auto S = [&](int v) { return std::max(1, static_cast<int>(v * sf)); };
 
-    framebuffer.DrawRect(S(8), S(8), S(300), S(84), Framebuffer::MakeColor(12, 16, 18), true);
+    framebuffer.DrawRect(S(8), S(8), S(300), S(98), Framebuffer::MakeColor(12, 16, 18), true);
 
     std::snprintf(line, sizeof(line), "FPS: %.1f", framesPerSecond);
     DrawText(framebuffer, S(14), S(14), line, textColor);
@@ -96,6 +97,10 @@ void DebugOverlay::Draw(Framebuffer& framebuffer, float framesPerSecond,
 
     std::snprintf(line, sizeof(line), "SECTORS: %d WALLS: %d", sectorCount, wallCount);
     DrawText(framebuffer, S(14), S(70), line, textColor);
+
+    std::snprintf(line, sizeof(line), "VIS: %d/%d CUL: %d",
+                  cullStats.visible, cullStats.total, cullStats.culled);
+    DrawText(framebuffer, S(14), S(84), line, textColor);
 }
 
 void DebugOverlay::DrawRestartPrompt(Framebuffer& framebuffer) const {
