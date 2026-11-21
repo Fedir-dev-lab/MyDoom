@@ -1,2 +1,6 @@
 MyDoom
-<img width="515" height="515" alt="MyDoom111" src="https://github.com/user-attachments/assets/5cc7135c-7ac9-48e8-970c-7482501ff0e0" />
+
+
+
+
+<img width="1261" height="1247" alt="MyDoom" src="https://github.com/user-attachments/assets/bab44980-3996-4a56-81cc-f358d00b4d4b" />
