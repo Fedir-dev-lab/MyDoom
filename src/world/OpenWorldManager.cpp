@@ -135,49 +135,60 @@ bool OpenWorldManager::Update(float playerX, float playerZ) {
 // RebuildRenderData — convert loaded chunks into renderable sectors + walls.
 // ---------------------------------------------------------------------------
 void OpenWorldManager::RebuildRenderData() {
-    m_renderData.sectors.clear();
-    m_renderData.walls.clear();
+    m_renderData.chunks.clear();
+    m_renderData.chunks.reserve(m_chunks.size());
 
     for (auto& [coord, chunk] : m_chunks) {
+        ChunkRenderData crd;
+        crd.coord = coord;
+
         const float x0 = coord.cx * kChunkSize;
         const float z0 = coord.cz * kChunkSize;
         const float x1 = x0 + kChunkSize;
         const float z1 = z0 + kChunkSize;
 
         // --- Floor sector (open sky, no ceiling) ---
-        Sector floor;
-        floor.floorHeight    = 0.0f;
-        floor.ceilingHeight  = std::nullopt;  // open sky
-        floor.floorMaterial  = 2;             // OutdoorFloor texture
-        floor.ambientLight   = 0.4f;
-        floor.vertices = {
+        crd.floor.floorHeight    = 0.0f;
+        crd.floor.ceilingHeight  = std::nullopt;  // open sky
+        crd.floor.floorMaterial  = 2;             // OutdoorFloor texture
+        crd.floor.ambientLight   = 0.4f;
+        crd.floor.vertices = {
             { x0, z0 },
             { x1, z0 },
             { x1, z1 },
             { x0, z1 },
         };
-        m_renderData.sectors.push_back(std::move(floor));
+        crd.floor.boundsMin = { x0, 0.0f, z0 };
+        crd.floor.boundsMax = { x1, 0.0f, z1 };
 
+        float maxH = 0.0f;
         // --- Building walls ---
         const float amb = 0.4f;
+        crd.walls.reserve(chunk.buildings.size() * 4);
         for (const Building& b : chunk.buildings) {
             const float bx0 = b.x,        bz0 = b.z;
             const float bx1 = b.x + b.w,  bz1 = b.z + b.d;
             const float top = b.height;
+            if (top > maxH) maxH = top;
 
             // South wall (z0 edge)
-            m_renderData.walls.push_back({
+            crd.walls.push_back({
                 Wall({ bx0, 0.f, bz0 }, { bx1, 0.f, bz0 }, 0.f, top, true), amb });
             // North wall (z1 edge)
-            m_renderData.walls.push_back({
+            crd.walls.push_back({
                 Wall({ bx1, 0.f, bz1 }, { bx0, 0.f, bz1 }, 0.f, top, true), amb });
             // West wall (x0 edge)
-            m_renderData.walls.push_back({
+            crd.walls.push_back({
                 Wall({ bx0, 0.f, bz1 }, { bx0, 0.f, bz0 }, 0.f, top, true), amb });
             // East wall (x1 edge)
-            m_renderData.walls.push_back({
+            crd.walls.push_back({
                 Wall({ bx1, 0.f, bz0 }, { bx1, 0.f, bz1 }, 0.f, top, true), amb });
         }
+
+        crd.boundsMin = { x0, 0.0f, z0 };
+        crd.boundsMax = { x1, std::max(maxH, 3.0f), z1 };
+
+        m_renderData.chunks.push_back(std::move(crd));
     }
 }
 

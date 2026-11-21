@@ -109,6 +109,10 @@ else()
 endif()
 add_custom_target(game_pack ALL DEPENDS "${GAME_PACK}")
 
+# --- Test suite -----------------------------------------------------------
+add_executable(test_frustum tests/test_frustum.cpp)
+target_include_directories(test_frustum PRIVATE "${CMAKE_SOURCE_DIR}/src")
+
 # --- Release packaging ----------------------------------------------------
 # cmake --install build/release --prefix dist
 # gives:  dist/MyDoomEngine   (the engine)

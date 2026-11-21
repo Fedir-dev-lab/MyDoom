@@ -79,7 +79,8 @@ void DebugOverlay::Draw(Framebuffer& framebuffer, float framesPerSecond,
     const float sf = static_cast<float>(framebuffer.Width()) / 640.0f;
     const auto S = [&](int v) { return std::max(1, static_cast<int>(v * sf)); };
 
-    framebuffer.DrawRect(S(8), S(8), S(300), S(98), Framebuffer::MakeColor(12, 16, 18), true);
+    const int bgH = (cullStats.chunksTotal > 0) ? S(140) : S(126);
+    framebuffer.DrawRect(S(8), S(8), S(300), bgH, Framebuffer::MakeColor(12, 16, 18), true);
 
     std::snprintf(line, sizeof(line), "FPS: %.1f", framesPerSecond);
     DrawText(framebuffer, S(14), S(14), line, textColor);
@@ -98,9 +99,23 @@ void DebugOverlay::Draw(Framebuffer& framebuffer, float framesPerSecond,
     std::snprintf(line, sizeof(line), "SECTORS: %d WALLS: %d", sectorCount, wallCount);
     DrawText(framebuffer, S(14), S(70), line, textColor);
 
-    std::snprintf(line, sizeof(line), "VIS: %d/%d CUL: %d",
-                  cullStats.visible, cullStats.total, cullStats.culled);
+    std::snprintf(line, sizeof(line), "SEC CULL: %d/%d (CUL: %d)",
+                  cullStats.sectorsVisible, cullStats.sectorsTotal, cullStats.sectorsCulled);
     DrawText(framebuffer, S(14), S(84), line, textColor);
+
+    std::snprintf(line, sizeof(line), "OBJ CULL: %d/%d (CUL: %d)",
+                  cullStats.objectsVisible, cullStats.objectsTotal, cullStats.objectsCulled);
+    DrawText(framebuffer, S(14), S(98), line, textColor);
+
+    std::snprintf(line, sizeof(line), "DRAW: %d PL / %d WL",
+                  cullStats.planesDrawn, cullStats.wallsDrawn);
+    DrawText(framebuffer, S(14), S(112), line, textColor);
+
+    if (cullStats.chunksTotal > 0) {
+        std::snprintf(line, sizeof(line), "CHK CULL: %d/%d (CUL: %d)",
+                      cullStats.chunksVisible, cullStats.chunksTotal, cullStats.chunksCulled);
+        DrawText(framebuffer, S(14), S(126), line, textColor);
+    }
 }
 
 void DebugOverlay::DrawRestartPrompt(Framebuffer& framebuffer) const {

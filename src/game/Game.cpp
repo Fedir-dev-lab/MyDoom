@@ -1148,8 +1148,7 @@ static void Render(AppState& app) {
 
     // -----------------------------------------------------------------------
     // Build frustum once per frame from the current camera.
-    // Used to cull sprites, enemies, pickups, projectiles, mesh objects, etc.
-    // Walls and planes use their own per-column/tile rejection; not culled here.
+    // Used to cull sectors, chunks, sprites, enemies, pickups, meshes, etc.
     // -----------------------------------------------------------------------
     Frustum frustum;
     frustum.Build(cam);
@@ -1158,9 +1157,9 @@ static void Render(AppState& app) {
     // Helper: test a bounding sphere against the 6 frustum planes.
     // Returns true (and bumps visible counter) when the object should be drawn.
     const auto SphereVisible = [&](const Vector3& pos, float radius) -> bool {
-        ++cullStats.total;
-        if (frustum.TestSphere(pos, radius)) { ++cullStats.visible; return true; }
-        ++cullStats.culled;
+        ++cullStats.objectsTotal;
+        if (frustum.TestSphere(pos, radius)) { ++cullStats.objectsVisible; return true; }
+        ++cullStats.objectsCulled;
         return false;
     };
 
@@ -1176,6 +1175,13 @@ static void Render(AppState& app) {
     const std::vector<PointLight>& activeLights = shadowsOn ? lights : kNoLights;
 
     for (const Sector& sector : app.map.Sectors()) {
+        ++cullStats.sectorsTotal;
+        if (!frustum.TestAABB(sector.boundsMin, sector.boundsMax)) {
+            ++cullStats.sectorsCulled;
+            continue;
+        }
+        ++cullStats.sectorsVisible;
+
         const Texture& floorTex =
             sector.floorMaterial == 0 ? app.assets.GetTexture(TextureId::FirstFloor) :
             sector.floorMaterial == 1 ? app.assets.GetTexture(TextureId::SecondFloor) :
@@ -1191,10 +1197,12 @@ static void Render(AppState& app) {
         if (!isMarsSurface) {
             rc.planeRenderer.DrawPlane(fb, cam,
                 sector.floorHeight, sector.vertices, activeLights, amb, secSun, floorTex);
+            ++cullStats.planesDrawn;
         }
         if (sector.ceilingHeight) {
             rc.planeRenderer.DrawPlane(fb, cam,
                 *sector.ceilingHeight, sector.vertices, activeLights, amb, noSun, ceilTex);
+            ++cullStats.planesDrawn;
         }
         if (!isMarsSurface) {
             for (const Wall& wall : sector.walls) {
@@ -1204,6 +1212,7 @@ static void Render(AppState& app) {
                     wall.topHeight.value_or(sector.ceilingHeight.value_or(3.0f)),
                     activeLights, amb, secSun,
                     app.assets.GetTexture(TextureId::Wall));
+                ++cullStats.wallsDrawn;
             }
         }
     }
@@ -1213,17 +1222,27 @@ static void Render(AppState& app) {
         const auto& owData = app.openWorld.GetRenderData();
         const Texture& floorTex = app.assets.GetTexture(TextureId::OutdoorFloor);
         const Texture& wallTex  = app.assets.GetTexture(TextureId::Wall);
-        for (const Sector& sector : owData.sectors) {
+        for (const auto& chunk : owData.chunks) {
+            ++cullStats.chunksTotal;
+            if (!frustum.TestAABB(chunk.boundsMin, chunk.boundsMax)) {
+                ++cullStats.chunksCulled;
+                continue;
+            }
+            ++cullStats.chunksVisible;
+
             rc.planeRenderer.DrawPlane(fb, cam,
-                sector.floorHeight, sector.vertices,
-                activeLights, sector.ambientLight, sunLight, floorTex);
-        }
-        for (const auto& [wall, amb] : owData.walls) {
-            rc.wallRenderer.DrawWall(fb, cam,
-                wall.start, wall.end,
-                wall.bottomHeight.value_or(0.0f),
-                wall.topHeight.value_or(3.0f),
-                activeLights, amb, sunLight, wallTex);
+                chunk.floor.floorHeight, chunk.floor.vertices,
+                activeLights, chunk.floor.ambientLight, sunLight, floorTex);
+            ++cullStats.planesDrawn;
+
+            for (const auto& [wall, amb] : chunk.walls) {
+                rc.wallRenderer.DrawWall(fb, cam,
+                    wall.start, wall.end,
+                    wall.bottomHeight.value_or(0.0f),
+                    wall.topHeight.value_or(3.0f),
+                    activeLights, amb, sunLight, wallTex);
+                ++cullStats.wallsDrawn;
+            }
         }
 
         // --- Physics bodies (OBB rigid bodies) ---
@@ -1253,11 +1272,25 @@ static void Render(AppState& app) {
         const float doorHeight = door.topHeight - door.bottomHeight;
         const float currentBottom = door.bottomHeight + ds->openFraction * doorHeight;
         if (currentBottom >= door.topHeight) { continue; }
+
+        // Object Frustum Culling for interactive doors
+        const Vector3 doorCenter{
+            (door.wallStart.x + door.wallEnd.x) * 0.5f,
+            (currentBottom + door.topHeight) * 0.5f,
+            (door.wallStart.z + door.wallEnd.z) * 0.5f
+        };
+        const float hdx = (door.wallEnd.x - door.wallStart.x) * 0.5f;
+        const float hdz = (door.wallEnd.z - door.wallStart.z) * 0.5f;
+        const float hdy = (door.topHeight - currentBottom) * 0.5f;
+        const float doorRadius = std::sqrt(hdx * hdx + hdy * hdy + hdz * hdz);
+        if (!SphereVisible(doorCenter, doorRadius)) { continue; }
+
         rc.wallRenderer.DrawWall(fb, cam,
             door.wallStart, door.wallEnd,
             currentBottom, door.topHeight,
             activeLights, 0.15f, noSun,
             app.assets.GetTexture(TextureId::Wall));
+        ++cullStats.wallsDrawn;
     }
 
     // --- 3D mesh objects ---------------------------------------------------
@@ -1281,11 +1314,17 @@ static void Render(AppState& app) {
     constexpr float kOutAmb = 0.4f, kInAmb = 0.15f;
 
     for (const WorldSprite& sprite : app.map.Sprites()) {
-        // Use half-diagonal of sprite as bounding radius.
-        const float sprR = std::sqrt(sprite.width * sprite.width +
-                                     sprite.height * sprite.height) * 0.5f;
         const Vector3 sprPos = GroundedPosition(sprite.position);
-        if (!SphereVisible(sprPos, sprR)) { continue; }
+        const Vector3 sprCenter{
+            sprPos.x,
+            sprPos.y + sprite.height * 0.5f,
+            sprPos.z
+        };
+        const float sprR = std::sqrt(
+            (sprite.width * 0.5f) * (sprite.width * 0.5f) +
+            (sprite.height * 0.5f) * (sprite.height * 0.5f)
+        );
+        if (!SphereVisible(sprCenter, sprR)) { continue; }
 
         const Texture* tex = &app.assets.GetTexture(TextureId::Lamp);
         float amb          = kOutAmb;
@@ -1308,10 +1347,21 @@ static void Render(AppState& app) {
 
     for (const Pickup& p : app.map.Pickups()) {
         if (!p.collected) {
+            constexpr float kPickupW = 0.8f;
+            constexpr float kPickupH = 0.8f;
             const Vector3 pPos = GroundedPosition(p.position);
-            if (!SphereVisible(pPos, 0.7f)) { continue; }
+            const Vector3 pCenter{
+                pPos.x,
+                pPos.y + kPickupH * 0.5f,
+                pPos.z
+            };
+            const float pR = std::sqrt(
+                (kPickupW * 0.5f) * (kPickupW * 0.5f) +
+                (kPickupH * 0.5f) * (kPickupH * 0.5f)
+            ) + 0.05f;
+            if (!SphereVisible(pCenter, pR)) { continue; }
             rc.spriteRenderer.DrawSprite(fb, cam,
-                pPos, 0.8f, 0.8f, activeLights, kOutAmb,
+                pPos, kPickupW, kPickupH, activeLights, kOutAmb,
                 shadowsOn ? sunLight : noSun,
                 p.healthAmount > 0 ? app.assets.GetTexture(TextureId::Medkit)
                                    : app.assets.GetTexture(TextureId::Ammo));
@@ -1343,10 +1393,18 @@ static void Render(AppState& app) {
         }
 
         const Vector3 groundedEnemyPosition = GroundedPosition(e.Position());
-
-        // Use Enemy::Radius() + sprite size margin as the culling sphere.
-        const float cullR = e.Radius() + std::max(width, height) * 0.6f;
-        if (!SphereVisible(groundedEnemyPosition, cullR)) { continue; }
+        const float actualWidth  = e.IsAlive() ? width : corpseWidth;
+        const float actualHeight = e.IsAlive() ? height : corpseHeight;
+        const Vector3 enemyCenter{
+            groundedEnemyPosition.x,
+            groundedEnemyPosition.y + actualHeight * 0.5f,
+            groundedEnemyPosition.z
+        };
+        const float cullR = std::sqrt(
+            (actualWidth * 0.5f) * (actualWidth * 0.5f) +
+            (actualHeight * 0.5f) * (actualHeight * 0.5f)
+        ) + 0.1f;
+        if (!SphereVisible(enemyCenter, cullR)) { continue; }
 
         if (!e.IsAlive()) {
             rc.spriteRenderer.DrawSprite(fb, cam,
@@ -1360,9 +1418,19 @@ static void Render(AppState& app) {
     }
 
     for (const Projectile& p : app.projectiles) {
-        if (!SphereVisible(p.position, p.radius + 0.3f)) { continue; }
+        constexpr float kProjSize = 0.45f;
+        const Vector3 projCenter{
+            p.position.x,
+            p.position.y + kProjSize * 0.5f,
+            p.position.z
+        };
+        const float projR = std::sqrt(
+            (kProjSize * 0.5f) * (kProjSize * 0.5f) +
+            (kProjSize * 0.5f) * (kProjSize * 0.5f)
+        ) + 0.05f;
+        if (!SphereVisible(projCenter, projR)) { continue; }
         rc.spriteRenderer.DrawSprite(fb, cam,
-            p.position, 0.45f, 0.45f, activeLights, 1.0f, noSun,
+            p.position, kProjSize, kProjSize, activeLights, 1.0f, noSun,
             app.assets.GetTexture(TextureId::Projectile));
     }
 
@@ -1373,11 +1441,23 @@ static void Render(AppState& app) {
         Vector3 gatePosition{
             (trigger.minX + trigger.maxX) * 0.5f, 0.0f,
             (trigger.minZ + trigger.maxZ) * 0.5f};
-        const float gateW = trigger.maxX - trigger.minX;
+        const float gateSizeX = trigger.maxX - trigger.minX;
+        const float gateSizeZ = trigger.maxZ - trigger.minZ;
+        const float gateW = std::max(gateSizeX, gateSizeZ);
+        constexpr float gateH = 4.0f;
         const Vector3 groundedGatePos = GroundedPosition(gatePosition);
-        if (!SphereVisible(groundedGatePos, std::sqrt(gateW * gateW + 16.0f) * 0.5f)) { continue; }
+        const Vector3 gateCenter{
+            groundedGatePos.x,
+            groundedGatePos.y + gateH * 0.5f,
+            groundedGatePos.z
+        };
+        const float gateR = std::sqrt(
+            (gateW * 0.5f) * (gateW * 0.5f) +
+            (gateH * 0.5f) * (gateH * 0.5f)
+        );
+        if (!SphereVisible(gateCenter, gateR)) { continue; }
         rc.spriteRenderer.DrawSprite(fb, cam,
-            groundedGatePos, gateW, 4.0f,
+            groundedGatePos, gateW, gateH,
             activeLights, 1.0f, noSun,
             app.assets.GetTexture(TextureId::ExitGate));
     }
@@ -1385,8 +1465,19 @@ static void Render(AppState& app) {
     for (const KeyPickupDef& keyDef : app.map.GetLevelData().keys) {
         const KeyState* ks = app.levelState.FindKey(keyDef.keyId);
         if (ks && ks->collected) { continue; }
+        constexpr float kKeyW = 0.5f;
+        constexpr float kKeyH = 0.7f;
         const Vector3 groundedKeyPos = GroundedPosition(keyDef.position);
-        if (!SphereVisible(groundedKeyPos, 0.6f)) { continue; }
+        const Vector3 keyCenter{
+            groundedKeyPos.x,
+            groundedKeyPos.y + kKeyH * 0.5f,
+            groundedKeyPos.z
+        };
+        const float keyR = std::sqrt(
+            (kKeyW * 0.5f) * (kKeyW * 0.5f) +
+            (kKeyH * 0.5f) * (kKeyH * 0.5f)
+        ) + 0.05f;
+        if (!SphereVisible(keyCenter, keyR)) { continue; }
         TextureId texId = TextureId::KeyRed;
         switch (keyDef.colour) {
             case KeyColour::Red:    texId = TextureId::KeyRed; break;
@@ -1395,7 +1486,7 @@ static void Render(AppState& app) {
             default: break;
         }
         rc.spriteRenderer.DrawSprite(fb, cam,
-            groundedKeyPos, 0.5f, 0.7f, activeLights,
+            groundedKeyPos, kKeyW, kKeyH, activeLights,
             kInAmb, noSun, app.assets.GetTexture(texId));
     }
 

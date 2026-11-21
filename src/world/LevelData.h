@@ -37,6 +37,52 @@ struct Sector {
     float ambientLight = 0.15f;
     std::vector<Vector2> vertices;
     std::vector<Wall> walls;
+
+    // Cached AABB bounds (world units)
+    Vector3 boundsMin{0.0f, 0.0f, 0.0f};
+    Vector3 boundsMax{0.0f, 0.0f, 0.0f};
+
+    void ComputeBounds() {
+        float minX = 1e9f, maxX = -1e9f;
+        float minZ = 1e9f, maxZ = -1e9f;
+        for (const Vector2& v : vertices) {
+            if (v.x < minX) minX = v.x;
+            if (v.x > maxX) maxX = v.x;
+            if (v.y < minZ) minZ = v.y;
+            if (v.y > maxZ) maxZ = v.y;
+        }
+
+        // Align baseline vertical bounds with the renderer's fallback rules:
+        // floor defaults to floorHeight; ceiling defaults to ceilingHeight or 3.0f.
+        const float defaultCeil = ceilingHeight.value_or(3.0f);
+        float minY = floorHeight;
+        float maxY = std::max(floorHeight, defaultCeil);
+
+        for (const Wall& w : walls) {
+            if (w.start.x < minX) minX = w.start.x;
+            if (w.start.x > maxX) maxX = w.start.x;
+            if (w.start.z < minZ) minZ = w.start.z;
+            if (w.start.z > maxZ) maxZ = w.start.z;
+
+            if (w.end.x < minX) minX = w.end.x;
+            if (w.end.x > maxX) maxX = w.end.x;
+            if (w.end.z < minZ) minZ = w.end.z;
+            if (w.end.z > maxZ) maxZ = w.end.z;
+
+            // Follow the exact fallback logic used in WallRenderer calls:
+            const float wallBottom = w.bottomHeight.value_or(floorHeight);
+            const float wallTop    = w.topHeight.value_or(defaultCeil);
+
+            if (wallBottom < minY) minY = wallBottom;
+            if (wallTop > maxY)    maxY = wallTop;
+        }
+        if (minX > maxX) {
+            minX = maxX = 0.0f;
+            minZ = maxZ = 0.0f;
+        }
+        boundsMin = {minX, minY, minZ};
+        boundsMax = {maxX, maxY, maxZ};
+    }
 };
 
 enum class SpriteType {

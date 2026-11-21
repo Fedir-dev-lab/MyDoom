@@ -71,11 +71,18 @@ public:
     // Direct access to physics world for input handling and rendering.
     phys::PhysicsWorld& Physics() { return m_physics; }
 
-    // Build renderable geometry for the current frame.
-    // Returns sectors (floors) and a flat wall list ready for WallRenderer.
+    // Renderable geometry for one chunk.
+    struct ChunkRenderData {
+        ChunkCoord coord;
+        Vector3 boundsMin;
+        Vector3 boundsMax;
+        Sector floor;
+        std::vector<std::pair<Wall, float>> walls;
+    };
+
+    // Build renderable geometry for the current frame, partitioned by chunk.
     struct RenderData {
-        std::vector<Sector>              sectors;   // floor quads
-        std::vector<std::pair<Wall, float>> walls;  // wall + sector ambientLight
+        std::vector<ChunkRenderData> chunks;
     };
     const RenderData& GetRenderData() const { return m_renderData; }
 

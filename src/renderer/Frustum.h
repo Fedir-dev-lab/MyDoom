@@ -31,9 +31,8 @@ struct Frustum {
     FrustumPlane planes[6];
 
     // Build frustum planes from the camera.
-    // fovH = full horizontal FOV in radians (passed at construction time for
-    // the render context). Vertical FOV is derived from fovH and aspect ratio.
-    void Build(const Camera& cam) {
+    // farDist = distance to the far clipping plane (default 400.0f).
+    void Build(const Camera& cam, float farDist = 400.0f) {
         // Camera basis (already orthonormal)
         const float rx = cam.right.x,   ry = cam.right.y,   rz = cam.right.z;
         const float ux = cam.up.x,      uy = cam.up.y,      uz = cam.up.z;
@@ -61,11 +60,10 @@ struct Frustum {
 
         // ---- Far plane: normal = -forward -----------------------------
         {
-            constexpr float kFar = 400.0f;
             planes[Far].nx = -fx;
             planes[Far].ny = -fy;
             planes[Far].nz = -fz;
-            planes[Far].d  = (fx * px + fy * py + fz * pz) + kFar;
+            planes[Far].d  = (fx * px + fy * py + fz * pz) + farDist;
         }
 
         // ---- Left / Right planes --------------------------------------
@@ -128,8 +126,9 @@ struct Frustum {
         return true;
     }
 
-    // AABB test: conservative — returns true if any corner is inside.
-    // Uses the "positive vertex" trick for each plane.
+    // AABB test: conservative p-vertex test — returns false if the entire box
+    // lies outside any one of the 6 planes; returns true if the box may
+    // intersect or be inside the visible frustum.
     bool TestAABB(const Vector3& mn, const Vector3& mx) const {
         for (int i = 0; i < 6; ++i) {
             const FrustumPlane& pl = planes[i];

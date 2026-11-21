@@ -24,6 +24,9 @@ Map::Map(LevelData levelData)
       m_meshObjects(std::move(levelData.meshObjects)),
       m_armorPickups(m_levelData.armorPickups),      // mutable copy for collected state
       m_audiologs(m_levelData.audiologs) {            // mutable copy for collected state
+    for (Sector& sector : m_sectors) {
+        sector.ComputeBounds();
+    }
 }
 
 int Map::WallCount() const {

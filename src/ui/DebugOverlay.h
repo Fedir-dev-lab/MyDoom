@@ -8,9 +8,24 @@ class Framebuffer;
 
 // Frustum culling statistics for a single frame.
 struct CullStats {
-    int total   = 0;
-    int visible = 0;
-    int culled  = 0;
+    // Objects (Mesh objects, physics bodies, sprites, enemies, pickups, projectiles, etc.)
+    int objectsTotal   = 0;
+    int objectsVisible = 0;
+    int objectsCulled  = 0;
+
+    // Sectors
+    int sectorsTotal   = 0;
+    int sectorsVisible = 0;
+    int sectorsCulled  = 0;
+
+    // Open World Chunks
+    int chunksTotal    = 0;
+    int chunksVisible  = 0;
+    int chunksCulled   = 0;
+
+    // Draw call counters (actual planes and walls submitted to rasterizer)
+    int planesDrawn    = 0;
+    int wallsDrawn     = 0;
 };
 
 class DebugOverlay {
