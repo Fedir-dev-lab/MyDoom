@@ -549,27 +549,21 @@ static bool HandleInput(AppState& app) {
     while (SDL_PollEvent(&event)) {
         if (event.type == SDL_EVENT_QUIT) { return false; }
 
-        // Drag & Drop: allow player to drop ANY .wav file onto the game window
+        // Drag & Drop: allow player to drop ANY music file (.mid, .it, .wav) onto the game window
         if (event.type == SDL_EVENT_DROP_FILE) {
             const char* droppedPath = event.drop.data;
             if (droppedPath) {
                 SDL_Log("[Soundtrack] File dropped: %s", droppedPath);
                 const std::string pathStr(droppedPath);
-                if (pathStr.size() >= 4 &&
-                    (pathStr.compare(pathStr.size() - 4, 4, ".wav") == 0 ||
-                     pathStr.compare(pathStr.size() - 4, 4, ".WAV") == 0)) {
-                    if (app.audio.ConvertAndApplyWav(pathStr)) {
-                        const auto& prof = app.audio.GetSoundtrackProfile();
-                        if (!app.soundtrackProfilePath.empty()) {
-                            SoundtrackConverter::SaveProfile(app.soundtrackProfilePath, prof);
-                        }
-                        app.menu.SetSoundtrackInfo(prof.name, static_cast<int>(prof.bpm), true, prof.statusMessage);
-                        app.hud.ShowMessage("CUSTOM SOUNDTRACK APPLIED");
-                    } else {
-                        app.hud.ShowMessage("CONVERSION FAILED (INVALID WAV)");
+                if (app.audio.ConvertAndApplyMusicFile(pathStr)) {
+                    const auto& prof = app.audio.GetSoundtrackProfile();
+                    if (!app.soundtrackProfilePath.empty()) {
+                        SoundtrackConverter::SaveProfile(app.soundtrackProfilePath, prof);
                     }
+                    app.menu.SetSoundtrackInfo(prof.name, static_cast<int>(prof.bpm), true, prof.statusMessage);
+                    app.hud.ShowMessage("CUSTOM SOUNDTRACK APPLIED");
                 } else {
-                    app.hud.ShowMessage("ONLY .WAV AUDIO FILES SUPPORTED");
+                    app.hud.ShowMessage("CONVERSION FAILED (UNSUPPORTED/INVALID FILE)");
                 }
             }
             continue;
@@ -615,24 +609,55 @@ static bool HandleInput(AppState& app) {
                     } else if (action == Menu::MainAction::FullscreenToggled) {
                         SetFullscreen(app, app.menu.FullscreenEnabled());
                     } else if (action == Menu::MainAction::ConvertMusicProject) {
-                        const std::string path = app.assetDirectory + "/music/MusicProject.wav";
-                        if (app.audio.ConvertAndApplyWav(path)) {
-                            const auto& prof = app.audio.GetSoundtrackProfile();
-                            app.menu.SetSoundtrackInfo(prof.name, static_cast<int>(prof.bpm), true, prof.statusMessage);
-                        } else {
-                            app.menu.SetSoundtrackInfo("CONVERSION FAILED", 0, false, "FILE NOT FOUND OR INVALID WAV");
+                        const std::vector<std::string> candidates = {
+                            app.assetDirectory + "/music/MusicProject.mid",
+                            app.assetDirectory + "/music/MusicProject.midi",
+                            app.assetDirectory + "/music/MusicProject.it",
+                            app.assetDirectory + "/music/MusicProject.wav"
+                        };
+                        bool converted = false;
+                        for (const auto& path : candidates) {
+                            if (app.audio.ConvertAndApplyMusicFile(path)) {
+                                const auto& prof = app.audio.GetSoundtrackProfile();
+                                if (!app.soundtrackProfilePath.empty()) {
+                                    SoundtrackConverter::SaveProfile(app.soundtrackProfilePath, prof);
+                                }
+                                app.menu.SetSoundtrackInfo(prof.name, static_cast<int>(prof.bpm), true, prof.statusMessage);
+                                converted = true;
+                                break;
+                            }
+                        }
+                        if (!converted) {
+                            app.menu.SetSoundtrackInfo("CONVERSION FAILED", 0, false, "FILE NOT FOUND OR INVALID FORMAT");
                         }
                     } else if (action == Menu::MainAction::ConvertCustomWav) {
-                        const std::string path = app.assetDirectory + "/music/custom.wav";
-                        if (app.audio.ConvertAndApplyWav(path)) {
-                            const auto& prof = app.audio.GetSoundtrackProfile();
-                            app.menu.SetSoundtrackInfo(prof.name, static_cast<int>(prof.bpm), true, prof.statusMessage);
-                        } else {
-                            app.menu.SetSoundtrackInfo("CONVERSION FAILED", 0, false, "DROP WAV TO assets/music/custom.wav");
+                        const std::vector<std::string> candidates = {
+                            app.assetDirectory + "/music/custom.mid",
+                            app.assetDirectory + "/music/custom.midi",
+                            app.assetDirectory + "/music/custom.it",
+                            app.assetDirectory + "/music/custom.wav"
+                        };
+                        bool converted = false;
+                        for (const auto& path : candidates) {
+                            if (app.audio.ConvertAndApplyMusicFile(path)) {
+                                const auto& prof = app.audio.GetSoundtrackProfile();
+                                if (!app.soundtrackProfilePath.empty()) {
+                                    SoundtrackConverter::SaveProfile(app.soundtrackProfilePath, prof);
+                                }
+                                app.menu.SetSoundtrackInfo(prof.name, static_cast<int>(prof.bpm), true, prof.statusMessage);
+                                converted = true;
+                                break;
+                            }
+                        }
+                        if (!converted) {
+                            app.menu.SetSoundtrackInfo("CONVERSION FAILED", 0, false, "DROP FILE OR PUT custom.mid/it/wav");
                         }
                     } else if (action == Menu::MainAction::ResetDefaultMusic) {
                         app.audio.ResetToDefaultSoundtrack();
                         const auto& prof = app.audio.GetSoundtrackProfile();
+                        if (!app.soundtrackProfilePath.empty()) {
+                            std::remove(app.soundtrackProfilePath.c_str());
+                        }
                         app.menu.SetSoundtrackInfo(prof.name, static_cast<int>(prof.bpm), false, "RESET TO MARS AMBIENT");
                     } else if (action == Menu::MainAction::Exit) {
                         return false;
@@ -1313,11 +1338,20 @@ static void Render(AppState& app) {
         const float doorRadius = std::sqrt(hdx * hdx + hdy * hdy + hdz * hdz);
         if (!SphereVisible(doorCenter, doorRadius)) { continue; }
 
+        // Door texture spans 1x1 across the door (U: 0..1, V: 0..1).
+        // As the door slides upward into the ceiling, the physical slab moves up rigidly:
+        // the bottom edge is always V = 1.0, while the top portion enters the ceiling at V = openFraction.
+        const float u0 = 0.0f;
+        const float u1 = 1.0f;
+        const float v0 = std::clamp(ds->openFraction, 0.0f, 1.0f);
+        const float v1 = 1.0f;
+
         rc.wallRenderer.DrawWall(fb, cam,
             door.wallStart, door.wallEnd,
             currentBottom, door.topHeight,
             activeLights, 0.15f, noSun,
-            app.assets.GetTexture(TextureId::Wall));
+            app.assets.GetTexture(TextureId::Door),
+            u0, u1, v0, v1);
         ++cullStats.wallsDrawn;
     }
 
@@ -1749,6 +1783,12 @@ int Game::Run(int argc, char* argv[]) {
     // Procedural synthesizer: no external files or audio libraries required.
     // SyncMusic starts procedural soundtrack if gameState == Menu.
     app.audio.Init();
+    app.soundtrackProfilePath = assetDirectory + "/music/soundtrack_profile.dat";
+    SoundtrackProfile savedProf;
+    if (SoundtrackConverter::LoadProfile(app.soundtrackProfilePath, savedProf)) {
+        app.audio.ApplySoundtrackProfile(savedProf);
+        app.menu.SetSoundtrackInfo(savedProf.name, static_cast<int>(savedProf.bpm), true, savedProf.statusMessage);
+    }
     SyncMusic(app);
 
     Uint64 lastTicks = SDL_GetTicksNS();

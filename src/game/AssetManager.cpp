@@ -11,11 +11,19 @@ AssetManager::AssetManager(std::string assetDirectory)
     m_textures.reserve(static_cast<size_t>(TextureId::Count));
 
     // Helper: спробувати завантажити PPM-файл, при невдачі повернути fallback.
-    auto loadOrFallback = [&](const std::string& filename, Texture fallback) -> Texture {
+    auto loadOrFallback = [&](const std::string& filename, Texture fallback,
+                              const std::string& altFilename = "") -> Texture {
         const std::string path = m_assetDirectory + "/textures/" + filename;
         if (auto t = Texture::LoadPpm(path)) {
             Logger::Info("Loaded texture: " + path);
             return std::move(*t);
+        }
+        if (!altFilename.empty()) {
+            const std::string altPath = m_assetDirectory + "/textures/" + altFilename;
+            if (auto t = Texture::LoadPpm(altPath)) {
+                Logger::Info("Loaded texture: " + altPath);
+                return std::move(*t);
+            }
         }
         if (std::filesystem::exists(path))
             Logger::Error("Could not read texture; using procedural fallback: " + path);
@@ -27,6 +35,13 @@ AssetManager::AssetManager(std::string assetDirectory)
         Texture::CreateCheckerboard(64, 64, 8,
             Framebuffer::MakeColor(196, 82, 48),
             Framebuffer::MakeColor(72, 28, 20))));
+
+    // ---- Door (TextureId::Door) ----
+    m_textures.push_back(loadOrFallback("door.ppm",
+        Texture::CreateCheckerboard(64, 64, 16,
+            Framebuffer::MakeColor(140, 140, 150),
+            Framebuffer::MakeColor(70, 70, 80)),
+        "Door.ppm"));
 
     // ---- Floors ----
     m_textures.push_back(loadOrFallback("floor1.ppm",

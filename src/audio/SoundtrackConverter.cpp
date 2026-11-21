@@ -75,6 +75,10 @@ float SnapToMusicalNote(float freq, float minHz = 65.0f, float maxHz = 880.0f) {
     return tuned;
 }
 
+inline float MidiNoteToHz(int note) {
+    return 440.0f * std::pow(2.0f, static_cast<float>(note - 69) / 12.0f);
+}
+
 // ---------------------------------------------------------------------------
 // Pure C++ WAV File Loader (16-bit, 24-bit, 32-bit float, mono/stereo)
 // ---------------------------------------------------------------------------
@@ -375,6 +379,502 @@ bool SoundtrackConverter::ConvertWav(const std::string& wavPath, SoundtrackProfi
     outProfile.statusMessage = msgBuf;
 
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// Pure C++ Standard MIDI (.mid / .midi) Parser & Procedural Music Converter
+// Format 0 & Format 1 support with note tracking, tempo, chords & lead arpeggio.
+// ---------------------------------------------------------------------------
+bool SoundtrackConverter::ConvertMidi(const std::string& midiPath, SoundtrackProfile& outProfile) {
+    std::ifstream file(midiPath, std::ios::binary);
+    if (!file.is_open()) return false;
+
+    std::vector<uint8_t> data((std::istreambuf_iterator<char>(file)),
+                               std::istreambuf_iterator<char>());
+    if (data.size() < 14) return false;
+
+    // Check "MThd" signature
+    if (std::memcmp(data.data(), "MThd", 4) != 0) return false;
+
+    const uint32_t headerLen = (static_cast<uint32_t>(data[4]) << 24) |
+                               (static_cast<uint32_t>(data[5]) << 16) |
+                               (static_cast<uint32_t>(data[6]) << 8)  |
+                                static_cast<uint32_t>(data[7]);
+    if (headerLen < 6 || data.size() < 8 + headerLen) return false;
+
+    const uint16_t numTracks = (static_cast<uint16_t>(data[10]) << 8) | data[11];
+    const uint16_t division  = (static_cast<uint16_t>(data[12]) << 8) | data[13];
+    (void)division;
+
+    struct TimedNote {
+        uint32_t tick = 0;
+        uint8_t  channel = 0;
+        uint8_t  note = 60;
+        uint8_t  velocity = 64;
+    };
+    std::vector<TimedNote> notes;
+    std::string trackName;
+    float detectedBpm = 120.0f;
+
+    size_t offset = 8 + headerLen;
+    for (int t = 0; t < numTracks && offset + 8 <= data.size(); ++t) {
+        if (std::memcmp(&data[offset], "MTrk", 4) != 0) {
+            size_t nextTrk = offset + 1;
+            while (nextTrk + 8 <= data.size() && std::memcmp(&data[nextTrk], "MTrk", 4) != 0) {
+                ++nextTrk;
+            }
+            if (nextTrk + 8 > data.size()) break;
+            offset = nextTrk;
+        }
+
+        const uint32_t trkLen = (static_cast<uint32_t>(data[offset + 4]) << 24) |
+                                (static_cast<uint32_t>(data[offset + 5]) << 16) |
+                                (static_cast<uint32_t>(data[offset + 6]) << 8)  |
+                                 static_cast<uint32_t>(data[offset + 7]);
+        offset += 8;
+        const size_t trkEnd = std::min(data.size(), offset + trkLen);
+        const uint8_t* ptr = &data[offset];
+        const uint8_t* end = &data[trkEnd];
+        offset = trkEnd;
+
+        uint32_t currentTick = 0;
+        uint8_t runningStatus = 0;
+
+        while (ptr < end) {
+            // Delta-time (VLQ)
+            uint32_t dt = 0;
+            while (ptr < end) {
+                uint8_t b = *ptr++;
+                dt = (dt << 7) | (b & 0x7F);
+                if ((b & 0x80) == 0) break;
+            }
+            currentTick += dt;
+            if (ptr >= end) break;
+
+            uint8_t status = *ptr;
+            if (status & 0x80) {
+                runningStatus = status;
+                ++ptr;
+            } else {
+                status = runningStatus;
+            }
+
+            if (status == 0xFF) { // Meta Event
+                if (ptr >= end) break;
+                uint8_t metaType = *ptr++;
+                uint32_t metaLen = 0;
+                while (ptr < end) {
+                    uint8_t b = *ptr++;
+                    metaLen = (metaLen << 7) | (b & 0x7F);
+                    if ((b & 0x80) == 0) break;
+                }
+                if (ptr + metaLen > end) break;
+
+                if (metaType == 0x03 && trackName.empty() && metaLen > 0) {
+                    trackName.assign(reinterpret_cast<const char*>(ptr), metaLen);
+                } else if (metaType == 0x51 && metaLen == 3) {
+                    uint32_t us = (static_cast<uint32_t>(ptr[0]) << 16) |
+                                  (static_cast<uint32_t>(ptr[1]) << 8)  |
+                                   static_cast<uint32_t>(ptr[2]);
+                    if (us > 0) {
+                        detectedBpm = 60000000.0f / static_cast<float>(us);
+                    }
+                }
+                ptr += metaLen;
+            } else if (status == 0xF0 || status == 0xF7) { // SysEx
+                uint32_t sysexLen = 0;
+                while (ptr < end) {
+                    uint8_t b = *ptr++;
+                    sysexLen = (sysexLen << 7) | (b & 0x7F);
+                    if ((b & 0x80) == 0) break;
+                }
+                if (ptr + sysexLen > end) break;
+                ptr += sysexLen;
+            } else { // Channel voice
+                uint8_t msg = status & 0xF0;
+                uint8_t ch  = status & 0x0F;
+                if (msg == 0x90) { // Note On
+                    if (ptr + 1 >= end) break;
+                    uint8_t note = *ptr++;
+                    uint8_t vel  = *ptr++;
+                    if (vel > 0 && ch != 9) { // skip percussion ch 10
+                        notes.push_back({ currentTick, ch, note, vel });
+                    }
+                } else if (msg == 0x80) { // Note Off
+                    if (ptr + 1 >= end) break;
+                    ptr += 2;
+                } else if (msg == 0xA0 || msg == 0xB0 || msg == 0xE0) {
+                    if (ptr + 1 >= end) break;
+                    ptr += 2;
+                } else if (msg == 0xC0 || msg == 0xD0) {
+                    if (ptr >= end) break;
+                    ptr += 1;
+                }
+            }
+        }
+    }
+
+    if (notes.empty()) {
+        return false;
+    }
+
+    std::sort(notes.begin(), notes.end(), [](const TimedNote& a, const TimedNote& b) {
+        return a.tick < b.tick;
+    });
+
+    const uint32_t maxTick = std::max(1u, notes.back().tick);
+    detectedBpm = std::clamp(detectedBpm, 45.0f, 210.0f);
+    outProfile.bpm = detectedBpm;
+
+    // 1. Chords extraction: divide into 4 time quarters
+    const double quarterTicks = static_cast<double>(maxTick) / 4.0;
+    for (int sec = 0; sec < 4; ++sec) {
+        const double tStart = sec * quarterTicks;
+        const double tEnd   = (sec + 1) * quarterTicks;
+
+        std::array<int, 12> pitchHist = {0};
+        for (const auto& n : notes) {
+            if (n.tick >= tStart && n.tick < tEnd) {
+                pitchHist[n.note % 12]++;
+            }
+        }
+
+        std::vector<std::pair<int, int>> sortedClasses;
+        for (int p = 0; p < 12; ++p) {
+            if (pitchHist[p] > 0) sortedClasses.push_back({ pitchHist[p], p });
+        }
+        std::sort(sortedClasses.rbegin(), sortedClasses.rend());
+
+        std::vector<float> chordFreqs;
+        for (size_t i = 0; i < sortedClasses.size() && chordFreqs.size() < 4; ++i) {
+            int p = sortedClasses[i].second;
+            float f = SnapToMusicalNote(MidiNoteToHz(48 + p), 70.0f, 220.0f);
+            chordFreqs.push_back(f);
+        }
+
+        if (chordFreqs.empty()) chordFreqs.push_back(110.0f);
+        while (chordFreqs.size() < 4) {
+            float base = chordFreqs[0];
+            if (chordFreqs.size() == 1) chordFreqs.push_back(base * 1.25992f);
+            else if (chordFreqs.size() == 2) chordFreqs.push_back(base * 1.49831f);
+            else if (chordFreqs.size() == 3) chordFreqs.push_back(base * 1.78180f);
+        }
+
+        std::sort(chordFreqs.begin(), chordFreqs.end());
+        for (int k = 0; k < 4; ++k) {
+            outProfile.chords[sec][k] = chordFreqs[k];
+        }
+    }
+
+    // 2. Arpeggio / Lead melody (16 steps)
+    const double stepTicks = static_cast<double>(maxTick) / 16.0;
+    for (int step = 0; step < 16; ++step) {
+        const double sStart = step * stepTicks;
+        const double sEnd   = (step + 1) * stepTicks;
+
+        int bestNote = -1;
+        int maxScore = -1;
+        for (const auto& n : notes) {
+            if (n.tick >= sStart && n.tick < sEnd) {
+                int score = n.velocity + n.note * 2;
+                if (score > maxScore) {
+                    maxScore = score;
+                    bestNote = n.note;
+                }
+            }
+        }
+
+        if (bestNote >= 0) {
+            outProfile.arpNotes[step] = SnapToMusicalNote(MidiNoteToHz(bestNote), 180.0f, 660.0f);
+        } else if (step > 0) {
+            outProfile.arpNotes[step] = outProfile.arpNotes[step - 1];
+        } else {
+            outProfile.arpNotes[step] = 220.0f;
+        }
+    }
+
+    // 3. Sub-bass
+    int lowestNote = 127;
+    for (const auto& n : notes) {
+        if (n.note < lowestNote) lowestNote = n.note;
+    }
+    float subFreq = (lowestNote < 127) ? MidiNoteToHz(lowestNote) : outProfile.chords[0][0] * 0.5f;
+    while (subFreq > 60.0f) subFreq *= 0.5f;
+    while (subFreq < 40.0f) subFreq *= 2.0f;
+    outProfile.subBassFreq = subFreq;
+
+    // File basename for display
+    std::string base = midiPath;
+    const size_t slash = base.find_last_of("/\\");
+    if (slash != std::string::npos) base = base.substr(slash + 1);
+
+    std::string displayName = trackName.empty() ? base : trackName;
+    outProfile.name = "MIDI (" + displayName + ")";
+    outProfile.isCustom = true;
+
+    char msgBuf[128];
+    std::snprintf(msgBuf, sizeof(msgBuf), "CONVERTED MIDI -> %d BPM, 4 CHORDS",
+                  static_cast<int>(outProfile.bpm));
+    outProfile.statusMessage = msgBuf;
+
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Pure C++ Impulse Tracker (.it) Module Parser & Procedural Music Converter
+// Reads IMPM header, orders, and packed patterns to extract harmony & tempo.
+// ---------------------------------------------------------------------------
+bool SoundtrackConverter::ConvertIT(const std::string& itPath, SoundtrackProfile& outProfile) {
+    std::ifstream file(itPath, std::ios::binary);
+    if (!file.is_open()) return false;
+
+    std::vector<uint8_t> data((std::istreambuf_iterator<char>(file)),
+                               std::istreambuf_iterator<char>());
+    if (data.size() < 192) return false;
+
+    // Check "IMPM" signature
+    if (std::memcmp(data.data(), "IMPM", 4) != 0) return false;
+
+    char rawName[27] = {0};
+    std::memcpy(rawName, &data[4], 26);
+    std::string songName(rawName);
+    while (!songName.empty() && (songName.back() == ' ' || songName.back() == '\0')) {
+        songName.pop_back();
+    }
+
+    const uint16_t ordNum = static_cast<uint16_t>(data[0x20]) | (static_cast<uint16_t>(data[0x21]) << 8);
+    const uint16_t insNum = static_cast<uint16_t>(data[0x22]) | (static_cast<uint16_t>(data[0x23]) << 8);
+    const uint16_t smpNum = static_cast<uint16_t>(data[0x24]) | (static_cast<uint16_t>(data[0x25]) << 8);
+    const uint16_t patNum = static_cast<uint16_t>(data[0x26]) | (static_cast<uint16_t>(data[0x27]) << 8);
+    const uint8_t initialTempo = data[0x33];
+
+    float bpm = (initialTempo >= 32) ? static_cast<float>(initialTempo) : 125.0f;
+    outProfile.bpm = std::clamp(bpm, 45.0f, 210.0f);
+
+    const size_t ordersOffset = 0xC0;
+    if (ordersOffset + ordNum > data.size()) return false;
+
+    const size_t patPtrsOffset = ordersOffset + ordNum + insNum * 4 + smpNum * 4;
+    if (patPtrsOffset + patNum * 4 > data.size()) return false;
+
+    std::vector<uint32_t> patOffsets(patNum, 0);
+    for (size_t p = 0; p < patNum; ++p) {
+        const size_t off = patPtrsOffset + p * 4;
+        patOffsets[p] = static_cast<uint32_t>(data[off]) |
+                        (static_cast<uint32_t>(data[off + 1]) << 8) |
+                        (static_cast<uint32_t>(data[off + 2]) << 16) |
+                        (static_cast<uint32_t>(data[off + 3]) << 24);
+    }
+
+    struct ITNoteEvent {
+        uint32_t globalRow = 0;
+        int channel = 0;
+        int note = 60; // 0..119
+    };
+    std::vector<ITNoteEvent> notes;
+
+    uint32_t globalRow = 0;
+    for (size_t o = 0; o < ordNum; ++o) {
+        uint8_t patIdx = data[ordersOffset + o];
+        if (patIdx == 255) break;
+        if (patIdx == 254) continue;
+        if (patIdx >= patNum) continue;
+
+        uint32_t pOff = patOffsets[patIdx];
+        if (pOff == 0 || pOff + 8 > data.size()) continue;
+
+        uint16_t dataLen = static_cast<uint16_t>(data[pOff]) | (static_cast<uint16_t>(data[pOff + 1]) << 8);
+        uint16_t rows    = static_cast<uint16_t>(data[pOff + 2]) | (static_cast<uint16_t>(data[pOff + 3]) << 8);
+        if (rows == 0) rows = 64;
+
+        const uint8_t* ptr = &data[pOff + 8];
+        const uint8_t* end = std::min(&data[pOff + 8 + dataLen], data.data() + data.size());
+
+        uint8_t lastMask[64] = {0};
+        uint8_t lastNote[64] = {255};
+
+        uint16_t r = 0;
+        while (r < rows && ptr < end) {
+            uint8_t b = *ptr++;
+            if (b == 0) {
+                ++r;
+                ++globalRow;
+                continue;
+            }
+
+            int ch = (b - 1) & 63;
+            uint8_t mask = 0;
+            if (b & 128) {
+                if (ptr >= end) break;
+                mask = *ptr++;
+                lastMask[ch] = mask;
+            } else {
+                mask = lastMask[ch];
+            }
+
+            if (mask & 1) { // Note follows
+                if (ptr >= end) break;
+                uint8_t n = *ptr++;
+                lastNote[ch] = n;
+                if (n < 120) {
+                    notes.push_back({ globalRow, ch, n });
+                }
+            } else if (mask & 16) { // Reuse note
+                if (lastNote[ch] < 120) {
+                    notes.push_back({ globalRow, ch, lastNote[ch] });
+                }
+            }
+
+            if (mask & 2) { if (ptr < end) ++ptr; }
+            if (mask & 4) { if (ptr < end) ++ptr; }
+            if (mask & 8) { if (ptr + 1 < end) ptr += 2; }
+        }
+    }
+
+    if (notes.empty()) {
+        return false;
+    }
+
+    const uint32_t maxRow = std::max(1u, globalRow);
+
+    // 1. Chords (4 sections)
+    const double quarterRows = static_cast<double>(maxRow) / 4.0;
+    for (int sec = 0; sec < 4; ++sec) {
+        const double rStart = sec * quarterRows;
+        const double rEnd   = (sec + 1) * quarterRows;
+
+        std::array<int, 12> pitchHist = {0};
+        for (const auto& n : notes) {
+            if (n.globalRow >= rStart && n.globalRow < rEnd) {
+                pitchHist[n.note % 12]++;
+            }
+        }
+
+        std::vector<std::pair<int, int>> sortedClasses;
+        for (int p = 0; p < 12; ++p) {
+            if (pitchHist[p] > 0) sortedClasses.push_back({ pitchHist[p], p });
+        }
+        std::sort(sortedClasses.rbegin(), sortedClasses.rend());
+
+        std::vector<float> chordFreqs;
+        for (size_t i = 0; i < sortedClasses.size() && chordFreqs.size() < 4; ++i) {
+            int p = sortedClasses[i].second;
+            float f = SnapToMusicalNote(MidiNoteToHz(48 + p), 70.0f, 220.0f);
+            chordFreqs.push_back(f);
+        }
+
+        if (chordFreqs.empty()) chordFreqs.push_back(110.0f);
+        while (chordFreqs.size() < 4) {
+            float base = chordFreqs[0];
+            if (chordFreqs.size() == 1) chordFreqs.push_back(base * 1.25992f);
+            else if (chordFreqs.size() == 2) chordFreqs.push_back(base * 1.49831f);
+            else if (chordFreqs.size() == 3) chordFreqs.push_back(base * 1.78180f);
+        }
+
+        std::sort(chordFreqs.begin(), chordFreqs.end());
+        for (int k = 0; k < 4; ++k) {
+            outProfile.chords[sec][k] = chordFreqs[k];
+        }
+    }
+
+    // 2. Arpeggio / Lead (16 steps)
+    const double stepRows = static_cast<double>(maxRow) / 16.0;
+    for (int step = 0; step < 16; ++step) {
+        const double sStart = step * stepRows;
+        const double sEnd   = (step + 1) * stepRows;
+
+        int highestNote = -1;
+        for (const auto& n : notes) {
+            if (n.globalRow >= sStart && n.globalRow < sEnd) {
+                if (n.note > highestNote) {
+                    highestNote = n.note;
+                }
+            }
+        }
+
+        if (highestNote >= 0) {
+            outProfile.arpNotes[step] = SnapToMusicalNote(MidiNoteToHz(highestNote), 180.0f, 660.0f);
+        } else if (step > 0) {
+            outProfile.arpNotes[step] = outProfile.arpNotes[step - 1];
+        } else {
+            outProfile.arpNotes[step] = 220.0f;
+        }
+    }
+
+    // 3. Sub-bass
+    int lowestNote = 120;
+    for (const auto& n : notes) {
+        if (n.note < lowestNote) lowestNote = n.note;
+    }
+    float subFreq = (lowestNote < 120) ? MidiNoteToHz(lowestNote) : outProfile.chords[0][0] * 0.5f;
+    while (subFreq > 60.0f) subFreq *= 0.5f;
+    while (subFreq < 40.0f) subFreq *= 2.0f;
+    outProfile.subBassFreq = subFreq;
+
+    std::string base = itPath;
+    const size_t slash = base.find_last_of("/\\");
+    if (slash != std::string::npos) base = base.substr(slash + 1);
+
+    std::string displayName = songName.empty() ? base : songName;
+    outProfile.name = "IT (" + displayName + ")";
+    outProfile.isCustom = true;
+
+    char msgBuf[128];
+    std::snprintf(msgBuf, sizeof(msgBuf), "CONVERTED IT -> %d BPM, 4 CHORDS",
+                  static_cast<int>(outProfile.bpm));
+    outProfile.statusMessage = msgBuf;
+
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Universal format converter (auto-detects WAV, MIDI, IT by header / extension)
+// ---------------------------------------------------------------------------
+bool SoundtrackConverter::ConvertFile(const std::string& filePath, SoundtrackProfile& outProfile) {
+    std::ifstream file(filePath, std::ios::binary);
+    if (!file.is_open()) return false;
+
+    char magic[12] = {0};
+    file.read(magic, sizeof(magic));
+    file.close();
+
+    // 1. Magic signatures
+    if (std::memcmp(magic, "MThd", 4) == 0) {
+        return ConvertMidi(filePath, outProfile);
+    }
+    if (std::memcmp(magic, "IMPM", 4) == 0) {
+        return ConvertIT(filePath, outProfile);
+    }
+    if (std::memcmp(magic, "RIFF", 4) == 0 && std::memcmp(&magic[8], "WAVE", 4) == 0) {
+        return ConvertWav(filePath, outProfile);
+    }
+
+    // 2. File extensions (case-insensitive)
+    std::string ext;
+    const size_t dot = filePath.find_last_of('.');
+    if (dot != std::string::npos) {
+        ext = filePath.substr(dot);
+        std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        });
+    }
+
+    if (ext == ".mid" || ext == ".midi") {
+        return ConvertMidi(filePath, outProfile);
+    }
+    if (ext == ".it") {
+        return ConvertIT(filePath, outProfile);
+    }
+    if (ext == ".wav") {
+        return ConvertWav(filePath, outProfile);
+    }
+
+    // 3. Fallback try in sequence
+    if (ConvertMidi(filePath, outProfile)) return true;
+    if (ConvertIT(filePath, outProfile)) return true;
+    if (ConvertWav(filePath, outProfile)) return true;
+
+    return false;
 }
 
 bool SoundtrackConverter::SaveProfile(const std::string& filePath, const SoundtrackProfile& profile) {

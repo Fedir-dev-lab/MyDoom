@@ -23,7 +23,9 @@ public:
                   float bottomHeight, float topHeight,
                   const std::vector<PointLight>& lights, float ambientLight,
                   const DirectionalLight& sunLight,
-                  const Texture& texture) const;
+                  const Texture& texture,
+                  float u0 = 0.0f, float u1 = -1.0f,
+                  float v0 = 0.0f, float v1 = -1.0f) const;
 
 private:
     int m_screenWidth;

@@ -37,9 +37,14 @@ struct SoundtrackProfile {
 
 class SoundtrackConverter {
 public:
-    // Analyzes a WAV audio file and converts its musical DNA into a SoundtrackProfile.
-    // Returns false if file cannot be read or is invalid.
+    // Universal music converter: automatically identifies format (.wav, .midi / .mid, .it)
+    // and converts musical DNA (BPM, chords, melody, bass) into a real-time procedural SoundtrackProfile.
+    static bool ConvertFile(const std::string& filePath, SoundtrackProfile& outProfile);
+
+    // Format-specific converters (all pure C++20, zero external dependencies):
     static bool ConvertWav(const std::string& wavPath, SoundtrackProfile& outProfile);
+    static bool ConvertMidi(const std::string& midiPath, SoundtrackProfile& outProfile);
+    static bool ConvertIT(const std::string& itPath, SoundtrackProfile& outProfile);
 
     // Save/Load profile to/from disk (for persistence in user preferences directory)
     static bool SaveProfile(const std::string& filePath, const SoundtrackProfile& profile);

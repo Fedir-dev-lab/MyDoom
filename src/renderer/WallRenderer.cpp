@@ -155,7 +155,9 @@ void WallRenderer::DrawWall(Framebuffer& framebuffer, const Camera& camera,
                             float bottomHeight, float topHeight,
                             const std::vector<PointLight>& lights, float ambientLight,
                             const DirectionalLight& sunLight,
-                            const Texture& texture) const {
+                            const Texture& texture,
+                            float u0, float u1,
+                            float v0, float v1) const {
     const int sw = m_screenWidth, sh = m_screenHeight;
 
     // Wall tangent and length.
@@ -234,20 +236,26 @@ void WallRenderer::DrawWall(Framebuffer& framebuffer, const Camera& camera,
     // Draw all 5 textured faces.
     // -----------------------------------------------------------------------
 
-    // UV scale: 1 world unit = 1 texture tile, so the texture repeats
+    // UV scale: by default, 1 world unit = 1 texture tile, so the texture repeats
     // rather than stretches across walls of different sizes.
+    // If custom UV bounds (u1 >= 0 or v1 >= 0) are provided, use those instead.
     const float wallLen  = len;                            // length along X/Z
     const float wallH    = topHeight - bottomHeight;       // height
     const float wallT    = kWallThickness;                 // depth
+
+    const float texU0 = u0;
+    const float texU1 = (u1 < 0.0f) ? wallLen : u1;
+    const float texV0 = v0;
+    const float texV1 = (v1 < 0.0f) ? wallH : v1;
 
     // Front face: U along wall length, V along height.
     {
         const std::vector<Vector3> wv = { F0, F1, F2, F3 };
         const float uvs[8] = {
-            0.f,     wallH,
-            wallLen, wallH,
-            wallLen, 0.f,
-            0.f,     0.f
+            texU0, texV1,
+            texU1, texV1,
+            texU1, texV0,
+            texU0, texV0
         };
         drawTexFace(wv, uvs);
     }
@@ -256,10 +264,10 @@ void WallRenderer::DrawWall(Framebuffer& framebuffer, const Camera& camera,
     {
         const std::vector<Vector3> wv = { B0, B3, B2, B1 };
         const float uvs[8] = {
-            wallLen, wallH,
-            wallLen, 0.f,
-            0.f,     0.f,
-            0.f,     wallH
+            texU1, texV1,
+            texU1, texV0,
+            texU0, texV0,
+            texU0, texV1
         };
         drawTexFace(wv, uvs);
     }
@@ -268,10 +276,10 @@ void WallRenderer::DrawWall(Framebuffer& framebuffer, const Camera& camera,
     {
         const std::vector<Vector3> wv = { F3, F2, B2, B3 };
         const float uvs[8] = {
-            0.f,     0.f,
-            wallLen, 0.f,
-            wallLen, wallT,
-            0.f,     wallT
+            texU0, 0.f,
+            texU1, 0.f,
+            texU1, wallT,
+            texU0, wallT
         };
         drawTexFace(wv, uvs);
     }
@@ -280,10 +288,10 @@ void WallRenderer::DrawWall(Framebuffer& framebuffer, const Camera& camera,
     {
         const std::vector<Vector3> wv = { F0, B0, B1, F1 };
         const float uvs[8] = {
-            0.f,     0.f,
-            wallT,   0.f,
-            wallT,   wallLen,
-            0.f,     wallLen
+            texU0, 0.f,
+            wallT, 0.f,
+            wallT, texU1,
+            texU0, texU1
         };
         drawTexFace(wv, uvs);
     }
@@ -292,10 +300,10 @@ void WallRenderer::DrawWall(Framebuffer& framebuffer, const Camera& camera,
     {
         const std::vector<Vector3> wv = { F0, F3, B3, B0 };
         const float uvs[8] = {
-            0.f,   wallH,
-            0.f,   0.f,
-            wallT, 0.f,
-            wallT, wallH
+            0.f,   texV1,
+            0.f,   texV0,
+            wallT, texV0,
+            wallT, texV1
         };
         drawTexFace(wv, uvs);
     }
@@ -304,10 +312,10 @@ void WallRenderer::DrawWall(Framebuffer& framebuffer, const Camera& camera,
     {
         const std::vector<Vector3> wv = { B1, B2, F2, F1 };
         const float uvs[8] = {
-            0.f,   wallH,
-            0.f,   0.f,
-            wallT, 0.f,
-            wallT, wallH
+            0.f,   texV1,
+            0.f,   texV0,
+            wallT, texV0,
+            wallT, texV1
         };
         drawTexFace(wv, uvs);
     }

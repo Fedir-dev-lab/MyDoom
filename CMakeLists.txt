@@ -121,6 +121,12 @@ add_executable(test_lod
 )
 target_include_directories(test_lod PRIVATE "${CMAKE_SOURCE_DIR}/src")
 
+add_executable(test_audio_formats
+    tests/test_audio_formats.cpp
+    src/audio/SoundtrackConverter.cpp
+)
+target_include_directories(test_audio_formats PRIVATE "${CMAKE_SOURCE_DIR}/src")
+
 # --- Release packaging ----------------------------------------------------
 # cmake --install build/release --prefix dist
 # gives:  dist/MyDoomEngine   (the engine)

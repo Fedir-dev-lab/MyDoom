@@ -11,6 +11,7 @@
 // constructor implementation without changing its callers.
 enum class TextureId : size_t {
     Wall,
+    Door,
     FirstFloor,
     SecondFloor,
     OutdoorFloor,

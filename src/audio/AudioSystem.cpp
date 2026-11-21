@@ -784,9 +784,9 @@ const SoundtrackProfile& AudioSystem::GetSoundtrackProfile() const {
     return m_profile;
 }
 
-bool AudioSystem::ConvertAndApplyWav(const std::string& wavPath) {
+bool AudioSystem::ConvertAndApplyMusicFile(const std::string& filePath) {
     SoundtrackProfile newProf;
-    if (!SoundtrackConverter::ConvertWav(wavPath, newProf)) {
+    if (!SoundtrackConverter::ConvertFile(filePath, newProf)) {
         return false;
     }
     ApplySoundtrackProfile(newProf);

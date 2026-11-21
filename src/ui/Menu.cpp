@@ -517,8 +517,8 @@ void Menu::DrawSoundtrack(Framebuffer& fb) const {
 
     // Actions list
     const char* actions[kSoundtrackItems] = {
-        "CONVERT MUSICPROJECT.WAV",
-        "CONVERT CUSTOM.WAV",
+        "CONVERT MUSICPROJECT (.MID / .IT / .WAV)",
+        "CONVERT CUSTOM (.MID / .IT / .WAV)",
         "RESET MARS AMBIENT",
         "BACK"
     };
@@ -537,7 +537,7 @@ void Menu::DrawSoundtrack(Framebuffer& fb) const {
         DrawText(fb, ix,        iy,        actions[i], sel ? kSel : kNormal, kSS);
     }
 
-    const char* hint = "W S  MOVE   ENTER  SELECT   ESC  BACK";
+    const char* hint = "DROP .MID / .IT / .WAV ON WINDOW   ESC  BACK";
     const int footerY = H - S(16);
     if (kSub > 1)
         DrawText(fb, cx - TextWidth(hint, kSub) / 2 + 1, footerY + 1,

@@ -75,10 +75,11 @@ public:
     // Call once per frame in the main game loop to keep audio stream fed.
     void Tick();
 
-    // Soundtrack Profile & Converter API (converts user WAV files into engine synth format)
+    // Soundtrack Profile & Converter API (supports .wav, .midi / .mid, .it)
     void ApplySoundtrackProfile(const SoundtrackProfile& profile);
     const SoundtrackProfile& GetSoundtrackProfile() const;
-    bool ConvertAndApplyWav(const std::string& wavPath);
+    bool ConvertAndApplyMusicFile(const std::string& filePath);
+    bool ConvertAndApplyWav(const std::string& wavPath) { return ConvertAndApplyMusicFile(wavPath); }
     void ResetToDefaultSoundtrack();
 
     // Closes audio device and releases all resources.
