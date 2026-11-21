@@ -711,3 +711,76 @@ Texture Texture::CreateKey(int width, int height, uint32_t colour) {
 
     return Texture(width, height, std::move(pixels));
 }
+
+Texture Texture::CreateCubeImpostor(int width, int height,
+                                    uint32_t topColor, uint32_t frontColor, uint32_t sideColor) {
+    // 0 = transparent in RGBA8888 (alpha == 0)
+    std::vector<uint32_t> pixels(static_cast<size_t>(width) * height, 0);
+
+    const float fw = static_cast<float>(width);
+    const float fh = static_cast<float>(height);
+
+    // 7 key vertices of an axonometric 3D cube projection
+    const float cx    = fw * 0.5f;
+    const float topY  = fh * 0.08f;
+    const float midY  = fh * 0.32f;
+    const float leftX = fw * 0.12f;
+    const float rightX= fw * 0.88f;
+    const float centY = midY + (midY - topY);
+    const float botY  = fh * 0.70f;
+    const float botMidY = centY + (botY - midY);
+
+    struct Pt { float x, y; };
+    const Pt pTop{cx, topY};
+    const Pt pRight{rightX, midY};
+    const Pt pCenter{cx, centY};
+    const Pt pLeft{leftX, midY};
+    const Pt pBotLeft{leftX, botY};
+    const Pt pBotCenter{cx, botMidY};
+    const Pt pBotRight{rightX, botY};
+
+    auto InsideQuadCCW = [](float px, float py, Pt a, Pt b, Pt c, Pt d) -> bool {
+        auto cross = [](Pt p1, Pt p2, float x, float y) {
+            return (p2.x - p1.x) * (y - p1.y) - (p2.y - p1.y) * (x - p1.x);
+        };
+        return cross(a, b, px, py) >= 0.0f &&
+               cross(b, c, px, py) >= 0.0f &&
+               cross(c, d, px, py) >= 0.0f &&
+               cross(d, a, px, py) >= 0.0f;
+    };
+
+    const uint32_t borderColor = Framebuffer::MakeColor(45, 30, 20);
+
+    for (int y = 0; y < height; ++y) {
+        const float py = static_cast<float>(y) + 0.5f;
+        for (int x = 0; x < width; ++x) {
+            const float px = static_cast<float>(x) + 0.5f;
+
+            // 1. Top face (diamond): pLeft -> pTop -> pRight -> pCenter (CCW)
+            if (InsideQuadCCW(px, py, pLeft, pTop, pRight, pCenter)) {
+                const bool edge = (px - leftX < 1.5f) || (rightX - px < 1.5f) ||
+                                  (py - topY < 1.5f) || (centY - py < 1.5f);
+                pixels[static_cast<size_t>(y) * width + x] = edge ? borderColor : topColor;
+                continue;
+            }
+
+            // 2. Left face (front-left): pBotLeft -> pLeft -> pCenter -> pBotCenter (CCW)
+            if (InsideQuadCCW(px, py, pBotLeft, pLeft, pCenter, pBotCenter)) {
+                const bool edge = (px - leftX < 1.5f) || (std::abs(px - cx) < 1.0f) ||
+                                  (py - botY > -1.5f);
+                pixels[static_cast<size_t>(y) * width + x] = edge ? borderColor : frontColor;
+                continue;
+            }
+
+            // 3. Right face (front-right): pBotCenter -> pCenter -> pRight -> pBotRight (CCW)
+            if (InsideQuadCCW(px, py, pBotCenter, pCenter, pRight, pBotRight)) {
+                const bool edge = (rightX - px < 1.5f) || (std::abs(px - cx) < 1.0f) ||
+                                  (py - botY > -1.5f);
+                pixels[static_cast<size_t>(y) * width + x] = edge ? borderColor : sideColor;
+                continue;
+            }
+        }
+    }
+
+    return Texture(width, height, std::move(pixels));
+}

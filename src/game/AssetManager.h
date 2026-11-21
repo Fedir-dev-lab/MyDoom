@@ -34,6 +34,7 @@ enum class TextureId : size_t {
     KeyRed,
     KeyBlue,
     KeyYellow,
+    CubeImpostor,       // LOD 2 Impostor billboard texture for 3D cubes / crates
     Count,
 };
 

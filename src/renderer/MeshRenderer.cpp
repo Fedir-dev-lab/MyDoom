@@ -202,6 +202,32 @@ Mesh MakeCube(float size) {
     return mesh;
 }
 
+Mesh MakeSimplifiedCube(float size) {
+    const float h = size * 0.5f;
+    Mesh mesh;
+    // 6 vertices along axes: +Y, -Y, +X, -X, +Z, -Z
+    mesh.vertices = {
+        { 0.0f,  h,    0.0f}, // 0: Top (+Y)
+        { 0.0f, -h,    0.0f}, // 1: Bottom (-Y)
+        { h,    0.0f,  0.0f}, // 2: Right (+X)
+        {-h,    0.0f,  0.0f}, // 3: Left (-X)
+        { 0.0f, 0.0f,  h},    // 4: Front (+Z)
+        { 0.0f, 0.0f, -h}     // 5: Back (-Z)
+    };
+    // 8 CCW outward triangles
+    mesh.faces = {
+        {0, 4, 2}, // Top +Z +X
+        {0, 2, 5}, // Top +X -Z
+        {0, 5, 3}, // Top -Z -X
+        {0, 3, 4}, // Top -X +Z
+        {1, 2, 4}, // Bottom +X +Z
+        {1, 5, 2}, // Bottom -Z +X
+        {1, 3, 5}, // Bottom -X -Z
+        {1, 4, 3}  // Bottom +Z -X
+    };
+    return mesh;
+}
+
 MeshRenderer::MeshRenderer(int screenWidth, int screenHeight, float fieldOfViewRadians)
     : m_screenWidth(screenWidth),
       m_screenHeight(screenHeight) {

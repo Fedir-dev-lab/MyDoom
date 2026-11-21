@@ -79,7 +79,7 @@ void DebugOverlay::Draw(Framebuffer& framebuffer, float framesPerSecond,
     const float sf = static_cast<float>(framebuffer.Width()) / 640.0f;
     const auto S = [&](int v) { return std::max(1, static_cast<int>(v * sf)); };
 
-    const int bgH = (cullStats.chunksTotal > 0) ? S(140) : S(126);
+    const int bgH = (cullStats.chunksTotal > 0) ? S(154) : S(140);
     framebuffer.DrawRect(S(8), S(8), S(300), bgH, Framebuffer::MakeColor(12, 16, 18), true);
 
     std::snprintf(line, sizeof(line), "FPS: %.1f", framesPerSecond);
@@ -111,10 +111,14 @@ void DebugOverlay::Draw(Framebuffer& framebuffer, float framesPerSecond,
                   cullStats.planesDrawn, cullStats.wallsDrawn);
     DrawText(framebuffer, S(14), S(112), line, textColor);
 
+    std::snprintf(line, sizeof(line), "LOD: %d F / %d S / %d IMP",
+                  cullStats.lod0Count, cullStats.lod1Count, cullStats.lod2Count);
+    DrawText(framebuffer, S(14), S(126), line, textColor);
+
     if (cullStats.chunksTotal > 0) {
         std::snprintf(line, sizeof(line), "CHK CULL: %d/%d (CUL: %d)",
                       cullStats.chunksVisible, cullStats.chunksTotal, cullStats.chunksCulled);
-        DrawText(framebuffer, S(14), S(126), line, textColor);
+        DrawText(framebuffer, S(14), S(140), line, textColor);
     }
 }
 

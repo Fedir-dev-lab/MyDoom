@@ -26,6 +26,11 @@ struct CullStats {
     // Draw call counters (actual planes and walls submitted to rasterizer)
     int planesDrawn    = 0;
     int wallsDrawn     = 0;
+
+    // LOD tier counts (evaluated visible 3D objects)
+    int lod0Count      = 0; // Full 3D geometry
+    int lod1Count      = 0; // Simplified geometry
+    int lod2Count      = 0; // Impostors
 };
 
 class DebugOverlay {

@@ -31,6 +31,7 @@
 #include "renderer/Texture.h"
 #include "renderer/WallRenderer.h"
 #include "renderer/Frustum.h"
+#include "renderer/LODSystem.h"
 #include "ui/DebugOverlay.h"
 #include "ui/Hud.h"
 #include "ui/Menu.h"
@@ -180,6 +181,7 @@ struct AppState {
     bool isFullscreen = false;
     bool isOpenWorld  = false;
     OpenWorldManager openWorld;
+    LODSystem lodSystem;
 
 #ifdef DEV_MODE
     DevModeState devMode;
@@ -1260,8 +1262,34 @@ static void Render(AppState& app) {
             const Vector3 half{ body.half.x, body.half.y, body.half.z };
             const float bodyR = std::sqrt(half.x * half.x + half.y * half.y + half.z * half.z);
             if (!SphereVisible(pos, bodyR)) { continue; }
-            rc.meshRenderer.DrawMeshOBB(fb, cam, pos, body.R.m, half,
-                col, activeLights, 0.4f, sunLight);
+
+            // LOD evaluation for physics bodies
+            const float dist = cam.position.DistanceTo(pos);
+            const LODTier currentTier = static_cast<LODTier>(body.currentLOD);
+            const LODTier tier = app.lodSystem.SelectTier(dist, currentTier, true, nullptr);
+            body.currentLOD = static_cast<uint8_t>(tier);
+
+            if (tier == LODTier::LOD2_Impostor) {
+                ++cullStats.lod2Count;
+                const float maxHalf = std::max({half.x, half.y, half.z});
+                const float spriteH = maxHalf * 2.0f;
+                const float spriteW = maxHalf * 2.0f;
+                const Vector3 spriteBasePos{ pos.x, pos.y - spriteH * 0.5f, pos.z };
+                rc.spriteRenderer.DrawSprite(fb, cam,
+                    spriteBasePos, spriteW, spriteH,
+                    activeLights, 0.4f, sunLight,
+                    app.assets.GetTexture(TextureId::CubeImpostor));
+            } else if (tier == LODTier::Culled) {
+                // Beyond maxDistance cutoff, omitted
+            } else {
+                if (tier == LODTier::LOD1_Simplified) {
+                    ++cullStats.lod1Count;
+                } else {
+                    ++cullStats.lod0Count;
+                }
+                rc.meshRenderer.DrawMeshOBB(fb, cam, pos, body.R.m, half,
+                    col, activeLights, 0.4f, sunLight);
+            }
         }
     }
 
@@ -1300,14 +1328,57 @@ static void Render(AppState& app) {
     // setting; point lights still respect the toggle via activeLights.
     if (!app.map.MeshObjects().empty()) {
         static const Mesh kCube = MakeCube(1.0f);  // unit cube, scaled per object
+        static const Mesh kSimplifiedCube = MakeSimplifiedCube(1.0f);
+        LODModel cubeLODModel;
+        cubeLODModel.fullMesh = &kCube;
+        cubeLODModel.simplifiedMesh = &kSimplifiedCube;
+        cubeLODModel.impostorTexture = &app.assets.GetTexture(TextureId::CubeImpostor);
         const uint32_t kMeshColor = Framebuffer::MakeColor(190, 140, 100);
         for (const MeshObjectDef& obj : app.map.MeshObjects()) {
             // Bounding sphere radius: half-diagonal of a unit cube * scale.
             const float meshR = obj.scale * 0.87f; // sqrt(3)/2 ≈ 0.866
             if (!SphereVisible(obj.position, meshR)) { continue; }
-            rc.meshRenderer.DrawMesh(fb, cam,
-                obj.position, obj.yaw, obj.scale, kCube, kMeshColor,
-                activeLights, 0.15f, sunLight);
+
+            // Evaluate LOD tier after Frustum Culling
+            const float dist = cam.position.DistanceTo(obj.position);
+            const LODTier tier = app.lodSystem.SelectTier(dist, obj.currentLOD, obj.enableLOD, &cubeLODModel);
+            obj.currentLOD = tier;
+
+            switch (tier) {
+                case LODTier::LOD0_Full:
+                    ++cullStats.lod0Count;
+                    rc.meshRenderer.DrawMesh(fb, cam,
+                        obj.position, obj.yaw, obj.scale, kCube, kMeshColor,
+                        activeLights, 0.15f, sunLight);
+                    break;
+                case LODTier::LOD1_Simplified:
+                    ++cullStats.lod1Count;
+                    rc.meshRenderer.DrawMesh(fb, cam,
+                        obj.position, obj.yaw, obj.scale, kSimplifiedCube, kMeshColor,
+                        activeLights, 0.15f, sunLight);
+                    break;
+                case LODTier::LOD2_Impostor: {
+                    ++cullStats.lod2Count;
+                    // Billboard impostor: centered at obj.position.
+                    // SpriteRenderer::DrawSprite expects bottom-center pos:
+                    // (pos.x, pos.y - height * 0.5f, pos.z).
+                    const float spriteH = obj.scale * 1.0f;
+                    const float spriteW = obj.scale * 1.0f;
+                    const Vector3 spriteBasePos{
+                        obj.position.x,
+                        obj.position.y - spriteH * 0.5f,
+                        obj.position.z
+                    };
+                    rc.spriteRenderer.DrawSprite(fb, cam,
+                        spriteBasePos, spriteW, spriteH,
+                        activeLights, 0.4f, sunLight,
+                        app.assets.GetTexture(TextureId::CubeImpostor));
+                    break;
+                }
+                case LODTier::Culled:
+                    // Beyond maxDistance cutoff, omitted
+                    break;
+            }
         }
     }
 

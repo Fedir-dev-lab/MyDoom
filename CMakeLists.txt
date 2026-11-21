@@ -113,6 +113,14 @@ add_custom_target(game_pack ALL DEPENDS "${GAME_PACK}")
 add_executable(test_frustum tests/test_frustum.cpp)
 target_include_directories(test_frustum PRIVATE "${CMAKE_SOURCE_DIR}/src")
 
+add_executable(test_lod
+    tests/test_lod.cpp
+    src/renderer/Texture.cpp
+    src/renderer/Framebuffer.cpp
+    src/renderer/MeshRenderer.cpp
+)
+target_include_directories(test_lod PRIVATE "${CMAKE_SOURCE_DIR}/src")
+
 # --- Release packaging ----------------------------------------------------
 # cmake --install build/release --prefix dist
 # gives:  dist/MyDoomEngine   (the engine)

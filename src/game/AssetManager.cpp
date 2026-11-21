@@ -139,6 +139,13 @@ AssetManager::AssetManager(std::string assetDirectory)
 
     m_textures.push_back(loadOrFallback("key_yellow.ppm",
         Texture::CreateKey(24, 40, Framebuffer::MakeColor(210, 185, 30))));
+
+    // ---- LOD 2 Impostors ----
+    m_textures.push_back(loadOrFallback("cube_impostor.ppm",
+        Texture::CreateCubeImpostor(64, 64,
+            Framebuffer::MakeColor(230, 185, 140),  // top face
+            Framebuffer::MakeColor(190, 140, 100),  // front face
+            Framebuffer::MakeColor(140, 95, 65)))); // side face
 }
 
 const Texture& AssetManager::GetTexture(TextureId id) const {

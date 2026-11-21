@@ -85,6 +85,10 @@ public:
     // colour is an RGBA8888 packed value that tints the whole sprite.
     static Texture CreateKey(int width, int height, uint32_t colour);
 
+    // 3D Cube Impostor billboard texture (axonometric/isometric shaded faces with transparent background)
+    static Texture CreateCubeImpostor(int width, int height,
+                                      uint32_t topColor, uint32_t frontColor, uint32_t sideColor);
+
 private:
     int m_width;
     int m_height;

@@ -7,6 +7,7 @@
 #include "core/Vector2.h"
 #include "core/Vector3.h"
 #include "renderer/Lighting.h"
+#include "renderer/LODSystem.h"
 
 // Static data that describes one playable level. It deliberately has no game
 // logic: Map consumes it for collision/render queries, while LevelLoader
@@ -209,6 +210,10 @@ struct MeshObjectDef {
     Vector3   position;        // world-space centre of the object
     float     yaw       = 0.0f; // rotation about the world Y axis, radians
     float     scale     = 1.0f; // edge length in world units (for a cube)
+
+    // LOD & Impostor configuration
+    bool      enableLOD = true;
+    mutable LODTier currentLOD = LODTier::LOD0_Full; // cached tier for hysteresis
 };
 
 struct LevelData {

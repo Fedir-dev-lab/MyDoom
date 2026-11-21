@@ -30,6 +30,11 @@ struct Mesh {
 // as 12 CCW-outward triangles so backface culling keeps only the visible faces.
 Mesh MakeCube(float size);
 
+// Build a simplified 3D solid for medium-distance LOD 1.
+// 6 vertices, 8 CCW-outward triangles (octahedron hull bounding the cube),
+// providing a 33% reduction in triangles and vertex processing.
+Mesh MakeSimplifiedCube(float size);
+
 class MeshRenderer {
 public:
     MeshRenderer(int screenWidth, int screenHeight, float fieldOfViewRadians);

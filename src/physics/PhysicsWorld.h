@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <vector>
 #include <algorithm>
+#include <cstdint>
 
 namespace phys {
 
@@ -75,6 +76,7 @@ struct Body{
     int   corrN=0;
     Vec3  jAccum;
     float cr=1,cg=1,cb=1;
+    mutable uint8_t currentLOD = 0; // cached LODTier (0=Full, 1=Simplified, 2=Impostor, 3=Culled)
 };
 
 // ------------------------------------------------------------------ Contact
