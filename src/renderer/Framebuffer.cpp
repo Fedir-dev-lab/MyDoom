@@ -77,6 +77,82 @@ void Framebuffer::DrawRect(int x, int y, int w, int h, uint32_t color, bool fill
     DrawLine(x + w - 1, y, x + w - 1, y + h - 1, color);
 }
 
+void Framebuffer::BlendPixel(int x, int y, uint8_t r, uint8_t g, uint8_t b, float alpha) {
+    if (x < 0 || x >= m_width || y < 0 || y >= m_height || alpha <= 0.0f) { return; }
+    alpha = std::clamp(alpha, 0.0f, 1.0f);
+    const size_t index = static_cast<size_t>(y) * m_width + x;
+    const uint32_t pixel = m_pixels[index];
+    const int pr = (pixel >> 24) & 0xFF;
+    const int pg = (pixel >> 16) & 0xFF;
+    const int pb = (pixel >> 8)  & 0xFF;
+    const int a = static_cast<int>(alpha * 256.0f);
+    const int invA = 256 - a;
+    const int nr = (pr * invA + r * a) >> 8;
+    const int ng = (pg * invA + g * a) >> 8;
+    const int nb = (pb * invA + b * a) >> 8;
+    m_pixels[index] = MakeColor(static_cast<uint8_t>(nr),
+                                static_cast<uint8_t>(ng),
+                                static_cast<uint8_t>(nb));
+}
+
+void Framebuffer::DrawCircle(int cx, int cy, int radius, uint32_t color, bool filled) {
+    if (radius <= 0) { return; }
+    if (filled) {
+        const int r2 = radius * radius;
+        for (int dy = -radius; dy <= radius; ++dy) {
+            for (int dx = -radius; dx <= radius; ++dx) {
+                if (dx * dx + dy * dy <= r2) {
+                    SetPixel(cx + dx, cy + dy, color);
+                }
+            }
+        }
+    } else {
+        int x = radius, y = 0;
+        int err = 0;
+        while (x >= y) {
+            SetPixel(cx + x, cy + y, color);
+            SetPixel(cx + y, cy + x, color);
+            SetPixel(cx - y, cy + x, color);
+            SetPixel(cx - x, cy + y, color);
+            SetPixel(cx - x, cy - y, color);
+            SetPixel(cx - y, cy - x, color);
+            SetPixel(cx + y, cy - x, color);
+            SetPixel(cx + x, cy - y, color);
+            y += 1;
+            err += 1 + 2 * y;
+            if (2 * (err - x) + 1 > 0) {
+                x -= 1;
+                err += 1 - 2 * x;
+            }
+        }
+    }
+}
+
+void Framebuffer::DrawBlendCircle(int cx, int cy, int radius, uint8_t r, uint8_t g, uint8_t b, float alpha, bool filled) {
+    if (radius <= 0 || alpha <= 0.0f) { return; }
+    if (filled) {
+        const int r2 = radius * radius;
+        for (int dy = -radius; dy <= radius; ++dy) {
+            for (int dx = -radius; dx <= radius; ++dx) {
+                if (dx * dx + dy * dy <= r2) {
+                    BlendPixel(cx + dx, cy + dy, r, g, b, alpha);
+                }
+            }
+        }
+    } else {
+        const int rOuter2 = radius * radius;
+        const int rInner2 = std::max(0, (radius - 3) * (radius - 3));
+        for (int dy = -radius; dy <= radius; ++dy) {
+            for (int dx = -radius; dx <= radius; ++dx) {
+                const int dist2 = dx * dx + dy * dy;
+                if (dist2 <= rOuter2 && dist2 >= rInner2) {
+                    BlendPixel(cx + dx, cy + dy, r, g, b, alpha);
+                }
+            }
+        }
+    }
+}
+
 void Framebuffer::ApplyTint(uint8_t tr, uint8_t tg, uint8_t tb, float alpha) {
     if (alpha <= 0.0f) { return; }
     alpha = std::clamp(alpha, 0.0f, 1.0f);

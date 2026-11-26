@@ -57,14 +57,7 @@ bool IsValidLevelId(const std::string& value) {
 
 } // namespace
 
-std::optional<LoadedLevel> LevelLoader::Load(const std::string& path,
-                                              std::string& error) {
-    std::ifstream file(path);
-    if (!file) {
-        error = "Could not open level: " + path;
-        return std::nullopt;
-    }
-
+static std::optional<LoadedLevel> LoadFromStream(std::istream& file, std::string& error) {
     LoadedLevel level;
     std::unordered_map<int, size_t> sectorIndices;
     std::unordered_map<int, bool> spriteIds;
@@ -588,4 +581,20 @@ std::optional<LoadedLevel> LevelLoader::Load(const std::string& path,
         }
     }
     return level;
+}
+
+std::optional<LoadedLevel> LevelLoader::Load(const std::string& path,
+                                             std::string& error) {
+    std::ifstream file(path);
+    if (!file) {
+        error = "Could not open level: " + path;
+        return std::nullopt;
+    }
+    return LoadFromStream(file, error);
+}
+
+std::optional<LoadedLevel> LevelLoader::LoadFromMemory(const std::string& text,
+                                                        std::string& error) {
+    std::istringstream stream(text);
+    return LoadFromStream(stream, error);
 }

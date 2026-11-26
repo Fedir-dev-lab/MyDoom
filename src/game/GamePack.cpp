@@ -222,15 +222,22 @@ bool ResolveGameDir(const std::string& gameArgIn, const std::string& basePath,
         return false;
     }
 
-    const std::string loose = basePath + "assets";
-    if (fs::is_directory(loose, ec)) { outDir = loose; return true; }
-
     const std::string pack = basePath + "game.mdpk";
     if (fs::is_regular_file(pack, ec)) {
         return ExtractToCache(fs::path(pack), cacheRoot, outDir, error);
     }
 
-    error = "no game data: expected assets/ or game.mdpk next to the executable, "
+#ifdef __ANDROID__
+    const fs::path prefPack = cacheRoot.parent_path() / "game.mdpk";
+    if (fs::is_regular_file(prefPack, ec)) {
+        return ExtractToCache(prefPack, cacheRoot, outDir, error);
+    }
+#endif
+
+    const std::string loose = basePath + "assets";
+    if (fs::is_directory(loose, ec)) { outDir = loose; return true; }
+
+    error = "no game data: expected game.mdpk next to the executable, "
             "or run with --game <folder|file.mdpk>";
     return false;
 }

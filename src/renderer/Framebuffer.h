@@ -56,6 +56,9 @@ public:
 
     void DrawLine(int x0, int y0, int x1, int y1, uint32_t color);
     void DrawRect(int x, int y, int w, int h, uint32_t color, bool filled = false);
+    void DrawCircle(int cx, int cy, int radius, uint32_t color, bool filled = false);
+    void DrawBlendCircle(int cx, int cy, int radius, uint8_t r, uint8_t g, uint8_t b, float alpha, bool filled = false);
+    void BlendPixel(int x, int y, uint8_t r, uint8_t g, uint8_t b, float alpha);
     // Linearly blends a solid tint colour over every pixel in the color buffer.
     void ApplyTint(uint8_t r, uint8_t g, uint8_t b, float alpha);
 

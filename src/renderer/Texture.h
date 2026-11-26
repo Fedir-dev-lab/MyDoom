@@ -56,6 +56,7 @@ public:
     // Loads a portable pixmap (PPM P3 or P6) and converts it to RGBA8888.
     // Returns std::nullopt when the file cannot be read or is malformed.
     static std::optional<Texture> LoadPpm(const std::string& path);
+    static std::optional<Texture> LoadPpmFromMemory(const uint8_t* data, size_t size);
     static Texture CreateLamp(int width, int height, uint32_t poleColor,
                               uint32_t lightColor);
     static Texture CreateCeilingLamp(int width, int height, uint32_t bodyColor,

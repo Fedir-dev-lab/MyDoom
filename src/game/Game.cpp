@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <vector>
@@ -36,6 +37,7 @@
 #include "ui/Hud.h"
 #include "ui/Menu.h"
 #include "ui/Phone.h"
+#include "ui/TouchControls.h"
 #include "audio/AudioSystem.h"
 #include "weapons/Weapon.h"
 #include "world/Map.h"
@@ -151,6 +153,7 @@ struct AppState {
     Hud          hud;
     Menu         menu;
     Phone        phone;
+    TouchControls touchControls;
 
     // --- Game objects ---
     Player                  player;
@@ -541,12 +544,61 @@ static void ToggleFullscreen(AppState& app) {
     SetFullscreen(app, !app.isFullscreen);
 }
 
+static void InteractWithDoors(AppState& app) {
+    constexpr float kUseDistance = 2.0f;
+    const Vector3& pos = app.player.Position();
+    const float fwd_x = std::sin(app.player.Angle());
+    const float fwd_z = std::cos(app.player.Angle());
+    const Vector3 useTarget{pos.x + fwd_x * kUseDistance,
+                            pos.y,
+                            pos.z + fwd_z * kUseDistance};
+    for (const DoorDef& def : app.map.GetLevelData().doors) {
+        const float wx = def.wallEnd.x - def.wallStart.x;
+        const float wz = def.wallEnd.z - def.wallStart.z;
+        const float lenSq = wx * wx + wz * wz;
+        const float t = lenSq > 1e-9f
+            ? std::clamp(((useTarget.x - def.wallStart.x) * wx +
+                          (useTarget.z - def.wallStart.z) * wz) / lenSq, 0.0f, 1.0f)
+            : 0.0f;
+        const float cx = def.wallStart.x + wx * t;
+        const float cz = def.wallStart.z + wz * t;
+        const float dx = pos.x - cx;
+        const float dz = pos.z - cz;
+        if (dx * dx + dz * dz > kUseDistance * kUseDistance) { continue; }
+        DoorState* state = app.levelState.FindDoor(def.doorId);
+        if (!state) { continue; }
+        if (state->phase == DoorPhase::Closed || state->phase == DoorPhase::Closing) {
+            if (def.requiredKey != KeyColour::None && !app.levelState.HasKey(def.requiredKey)) {
+                std::string keyName;
+                switch (def.requiredKey) {
+                    case KeyColour::Red:    keyName = "RED"; break;
+                    case KeyColour::Blue:   keyName = "BLUE"; break;
+                    case KeyColour::Yellow: keyName = "YELLOW"; break;
+                    default: break;
+                }
+                app.hud.ShowMessage("YOU NEED THE " + keyName + " KEY");
+                break;
+            }
+            state->phase = DoorPhase::Opening;
+        } else {
+            state->phase = DoorPhase::Closing;
+        }
+        break;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // HandleInput
 // ---------------------------------------------------------------------------
 static bool HandleInput(AppState& app) {
+    app.touchControls.BeginFrame();
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
+        int inputWidth = kScreenWidth;
+        int inputHeight = kScreenHeight;
+        SDL_GetWindowSizeInPixels(app.window, &inputWidth, &inputHeight);
+        app.touchControls.HandleEvent(event, inputWidth, inputHeight,
+                                      app.gameState == GameState::Playing);
         if (event.type == SDL_EVENT_QUIT) { return false; }
 
         // Drag & Drop: allow player to drop ANY music file (.mid, .it, .wav) onto the game window
@@ -712,49 +764,7 @@ static bool HandleInput(AppState& app) {
             } else if (key == SDLK_Q) {
                 app.weapon.CycleWeapon(-1);
             } else if (key == SDLK_E) {
-                // Use interaction: open/close the nearest door within reach.
-                constexpr float kUseDistance = 2.0f;
-                const Vector3& pos = app.player.Position();
-                const float fwd_x = std::sin(app.player.Angle());
-                const float fwd_z = std::cos(app.player.Angle());
-                const Vector3 useTarget{pos.x + fwd_x * kUseDistance,
-                                        pos.y,
-                                        pos.z + fwd_z * kUseDistance};
-                for (const DoorDef& def : app.map.GetLevelData().doors) {
-                    // Find closest point on door segment to use-target.
-                    const float wx = def.wallEnd.x - def.wallStart.x;
-                    const float wz = def.wallEnd.z - def.wallStart.z;
-                    const float lenSq = wx * wx + wz * wz;
-                    const float t = lenSq > 1e-9f
-                        ? std::clamp(((useTarget.x - def.wallStart.x) * wx +
-                                      (useTarget.z - def.wallStart.z) * wz) / lenSq, 0.0f, 1.0f)
-                        : 0.0f;
-                    const float cx = def.wallStart.x + wx * t;
-                    const float cz = def.wallStart.z + wz * t;
-                    const float dx = pos.x - cx;
-                    const float dz = pos.z - cz;
-                    if (dx * dx + dz * dz > kUseDistance * kUseDistance) { continue; }
-                    // Toggle door phase
-                    DoorState* state = app.levelState.FindDoor(def.doorId);
-                    if (!state) { continue; }
-                    if (state->phase == DoorPhase::Closed || state->phase == DoorPhase::Closing) {
-                        if (def.requiredKey != KeyColour::None && !app.levelState.HasKey(def.requiredKey)) {
-                            std::string keyName;
-                            switch (def.requiredKey) {
-                                case KeyColour::Red:    keyName = "RED"; break;
-                                case KeyColour::Blue:   keyName = "BLUE"; break;
-                                case KeyColour::Yellow: keyName = "YELLOW"; break;
-                                default: break;
-                            }
-                            app.hud.ShowMessage("YOU NEED THE " + keyName + " KEY");
-                            break;
-                        }
-                        state->phase = DoorPhase::Opening;
-                    } else {
-                        state->phase = DoorPhase::Closing;
-                    }
-                    break; // interact with at most one door per press
-                }
+                InteractWithDoors(app);
             } else if (key == SDLK_F5) {
                 app.menu.ShowSave();
                 app.gameState = GameState::Paused;
@@ -774,6 +784,56 @@ static bool HandleInput(AppState& app) {
             }
         }
     }
+
+    if (app.gameState == GameState::Menu || app.gameState == GameState::Paused) {
+        if (app.touchControls.WasMenuUpPressed()) {
+            app.menu.NavigateUp();
+        } else if (app.touchControls.WasMenuDownPressed()) {
+            app.menu.NavigateDown();
+        } else if (app.touchControls.WasMenuConfirmPressed()) {
+            const Menu::MainAction action = app.menu.Confirm();
+            if (action == Menu::MainAction::NewGame) {
+                StartNewGame(app);
+            } else if (action == Menu::MainAction::LoadGame) {
+                DoLoad(app, app.menu.LoadSlot());
+            } else if (action == Menu::MainAction::SaveGame) {
+                DoSave(app, app.menu.SaveSlot());
+                app.gameState = GameState::Playing;
+                SyncMusic(app);
+            } else if (action == Menu::MainAction::ResolutionChanged) {
+                RebuildRenderContext(app, app.menu.SelectedResolution());
+            } else if (action == Menu::MainAction::FullscreenToggled) {
+                SetFullscreen(app, app.menu.FullscreenEnabled());
+            } else if (action == Menu::MainAction::Exit) {
+                app.running = false;
+            }
+        } else if (app.touchControls.WasMenuBackPressed() || app.touchControls.WasMenuPressed()) {
+            if (app.menu.CurrentScreen() != Menu::Screen::Main) {
+                app.menu.Back();
+            } else if (app.gameState == GameState::Paused) {
+                app.menu.Hide();
+                app.gameState = GameState::Playing;
+                SyncMusic(app);
+            }
+        }
+    } else if (app.touchControls.WasMenuPressed()) {
+        app.menu.Show();
+        app.gameState = GameState::Paused;
+        SyncMusic(app);
+    }
+
+    if (app.gameState == GameState::Playing) {
+        if (app.touchControls.WasInteractPressed()) {
+            InteractWithDoors(app);
+        }
+        if (app.touchControls.WasReloadPressed()) {
+            app.weapon.RequestReload();
+        }
+        if (app.touchControls.WasWeaponCyclePressed()) {
+            app.weapon.CycleWeapon(1);
+        }
+    }
+
     return true;
 }
 
@@ -807,8 +867,26 @@ static void Update(AppState& app, float deltaSeconds) {
 
     const bool* kb = SDL_GetKeyboardState(nullptr);
     float mdx = 0.0f, mdy = 0.0f;
+#ifdef __ANDROID__
+    // SDL/Android may mirror every finger as button 1.  Touch look must never
+    // be interpreted as mouse fire; firing is driven solely by the FIRE button.
+    const SDL_MouseButtonFlags mb = 0;
+#else
     const SDL_MouseButtonFlags mb = SDL_GetRelativeMouseState(&mdx, &mdy);
-    const bool mouseShoot = (mb & SDL_BUTTON_MASK(SDL_BUTTON_LEFT)) != 0;
+#endif
+
+    mdx += app.touchControls.LookDx();
+    mdy += app.touchControls.LookDy();
+
+    const float tMx = app.touchControls.MoveX();
+    const float tMy = app.touchControls.MoveY();
+
+    const bool moveFwd  = kb[SDL_SCANCODE_W] || kb[SDL_SCANCODE_UP]    || (tMy > 0.15f);
+    const bool moveBack = kb[SDL_SCANCODE_S] || kb[SDL_SCANCODE_DOWN]  || (tMy < -0.15f);
+    const bool strafeL  = kb[SDL_SCANCODE_A] || kb[SDL_SCANCODE_LEFT]  || (tMx < -0.15f);
+    const bool strafeR  = kb[SDL_SCANCODE_D] || kb[SDL_SCANCODE_RIGHT] || (tMx > 0.15f);
+
+    const bool mouseShoot = ((mb & SDL_BUTTON_MASK(SDL_BUTTON_LEFT)) != 0) || app.touchControls.IsShootHeld();
 
     // ---- Door animation ------------------------------------------------
     // Speed: full travel in 1 second (fraction units per second).
@@ -823,13 +901,11 @@ static void Update(AppState& app, float deltaSeconds) {
         }
     }
 
-    app.player.Update({kb[SDL_SCANCODE_W], kb[SDL_SCANCODE_S],
-                       kb[SDL_SCANCODE_A], kb[SDL_SCANCODE_D], mdx, mdy},
+    app.player.Update({moveFwd, moveBack, strafeL, strafeR, mdx, mdy},
                       deltaSeconds, app.map, app.levelState, app.menu.HeadBobEnabled());
 
     // Player footstep audio cadence
-    const bool playerIsMoving = kb[SDL_SCANCODE_W] || kb[SDL_SCANCODE_S] ||
-                                kb[SDL_SCANCODE_A] || kb[SDL_SCANCODE_D];
+    const bool playerIsMoving = moveFwd || moveBack || strafeL || strafeR;
     if (playerIsMoving && app.player.IsAlive()) {
         static float playerStepTimer = 0.0f;
         playerStepTimer += deltaSeconds;
@@ -1630,6 +1706,8 @@ static void Render(AppState& app) {
         app.menu.Draw(fb);
     }
 
+    app.touchControls.Draw(fb, app.gameState == GameState::Playing);
+
     SDL_UpdateTexture(app.screenTexture, nullptr, fb.Data(),
                       rw * static_cast<int>(sizeof(uint32_t)));
     SDL_RenderClear(app.sdlRenderer);
@@ -1662,7 +1740,8 @@ int Game::Run(int argc, char* argv[]) {
                     "  -w, --windowed    Launch in windowed mode (default)\n"
                     "  --game <path>     Game to run: a folder, or a .mdpk game pack\n"
                     "                    (also: MyDoomEngine mygame.mdpk)\n"
-                    "                    default: assets/ or game.mdpk next to the exe\n"
+                    "                    default: game.mdpk next to the exe\n"
+                    "                    (assets/ is a development fallback)\n"
                     "  -h, --help        Show this help message\n\n"
                     "In-game controls:\n"
                     "  F11 / Alt+Enter   Toggle fullscreen on/off\n"
@@ -1689,6 +1768,34 @@ int Game::Run(int argc, char* argv[]) {
     }
     Logger::Info("SDL video subsystem initialized.");
 
+#ifdef __ANDROID__
+    std::string writablePath = prefPath;
+    if (writablePath.empty()) {
+        const char* bp = SDL_GetBasePath();
+        writablePath = bp ? bp : ".";
+    }
+    std::filesystem::path targetMdpk = std::filesystem::path(writablePath) / "game.mdpk";
+    if (!std::filesystem::exists(targetMdpk)) {
+        SDL_IOStream* src = SDL_IOFromFile("game.mdpk", "rb");
+        if (src) {
+            std::ofstream dst(targetMdpk, std::ios::binary);
+            if (dst) {
+                char buf[8192];
+                size_t readBytes = 0;
+                while ((readBytes = SDL_ReadIO(src, buf, sizeof(buf))) > 0) {
+                    dst.write(buf, readBytes);
+                }
+            }
+            SDL_CloseIO(src);
+            SDL_Log("Extracted game.mdpk from Android assets to %s", targetMdpk.string().c_str());
+            Logger::Info("Extracted game.mdpk from Android assets to " + targetMdpk.string());
+        } else {
+            SDL_Log("Failed to open game.mdpk from Android assets: %s", SDL_GetError());
+            Logger::Error("Failed to open game.mdpk from Android assets: " + std::string(SDL_GetError()));
+        }
+    }
+#endif
+
     std::string assetDirectory = "assets";
     const char* basePath = SDL_GetBasePath();
     if (!basePath) {
@@ -1699,9 +1806,13 @@ int Game::Run(int argc, char* argv[]) {
     }
     {
         // Folder or .mdpk pack (unpacked into the cache) -> asset directory.
+#ifdef __ANDROID__
+        const std::filesystem::path cacheRoot = std::filesystem::path(writablePath) / "games";
+#else
         const std::filesystem::path cacheRoot = prefPath.empty()
             ? std::filesystem::temp_directory_path() / "MyDoomEngine" / "games"
             : std::filesystem::path(prefPath) / "games";
+#endif
         std::string resolvedDir, gameError;
         if (GamePack::ResolveGameDir(gameArg, basePath ? basePath : "", cacheRoot,
                                      resolvedDir, gameError)) {
@@ -1777,7 +1888,13 @@ int Game::Run(int argc, char* argv[]) {
         return 1;
     }
 
+#ifndef __ANDROID__
     SDL_SetWindowRelativeMouseMode(app.window, true);
+#else
+    // Android delivers look through SDL finger motion; relative mouse mode is
+    // neither needed nor reliable for a touchscreen.
+    SetFullscreen(app, true);
+#endif
 
     // --- Audio -----------------------------------------------------------
     // Procedural synthesizer: no external files or audio libraries required.

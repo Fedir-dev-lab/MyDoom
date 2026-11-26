@@ -72,26 +72,18 @@ if(NATIVE_ARCH)
     target_compile_options(${PROJECT_NAME} PRIVATE -march=native)
 endif()
 
-add_custom_target(copy_assets ALL
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        "${CMAKE_SOURCE_DIR}/assets" "$<TARGET_FILE_DIR:${PROJECT_NAME}>/assets"
-)
-
-# Asset changes do not rebuild C++ sources, so copying only POST_BUILD can
-# leave a stale level/texture next to an otherwise current executable. Make
-# this an ALL target that runs on every normal build instead.
-add_dependencies(${PROJECT_NAME} copy_assets)
-
-# --- Game pack (the "game file", like a .pk3/.wad for UZDoom) -----------
-# mdpack packs assets/ into one file: game.mdpk. The engine unpacks it itself.
+# ---------------------------------------------------------------------------
+# Game pack (the "game file", like a .pk3/.wad).
+# mdpack packs assets/ into one file: game.mdpk.  The engine extracts it
+# into the user's cache dir at startup; nothing else touches assets/ at runtime.
+# ---------------------------------------------------------------------------
 add_executable(mdpack tools/mdpack.cpp src/game/GamePack.cpp)
 target_include_directories(mdpack PRIVATE "${CMAKE_SOURCE_DIR}/src")
 
 file(GLOB_RECURSE GAME_ASSET_FILES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/assets/*")
 set(GAME_PACK "${CMAKE_BINARY_DIR}/game.mdpk")
 if(CMAKE_CROSSCOMPILING)
-    # mdpack.exe cannot run on the build machine: reuse game.mdpk made by a
-    # native build (the pack format is the same on every system).
+    # mdpack.exe cannot run on the build machine: reuse a pack from a native build.
     set(PREBUILT_GAME_PACK "" CACHE FILEPATH "game.mdpk from the native build")
     add_custom_command(
         OUTPUT "${GAME_PACK}"
@@ -108,6 +100,7 @@ else()
     )
 endif()
 add_custom_target(game_pack ALL DEPENDS "${GAME_PACK}")
+add_dependencies(${PROJECT_NAME} game_pack)
 
 # --- Test suite -----------------------------------------------------------
 add_executable(test_frustum tests/test_frustum.cpp)

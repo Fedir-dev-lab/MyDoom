@@ -1,22 +1,20 @@
+# IDE
+.idea/
+
+# Android / Gradle
+android/.gradle/
+android/.cxx/
+android/app/.cxx/
+android/local.properties
+
+# Build files
 build/
-build-*/
+build-android/
 dist/
-out/
-.cache/
-compile_commands.json
-*.o
-*.obj
-*.exe
-.vscode/ipch/
-CMakeFiles/
-CMakeCache.txt
-
 dist-win/
-*.tar.gz
-*.mdpk
-*.zip
 
-# Saves/logs are runtime data, never part of the project or a release
-saves/
-userdata/
-*.dat
+# Temporary files
+*.log
+*.tmp
+*~
+build/

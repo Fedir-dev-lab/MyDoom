@@ -26,7 +26,8 @@ bool Extract(const std::filesystem::path& packFile,
 //   gameArg  : value of --game / positional argument (folder or .mdpk), or ""
 //   basePath : folder of the executable (with trailing slash), or ""
 //   cacheRoot: where packs are unpacked
-// With no gameArg it uses <basePath>/assets, else <basePath>/game.mdpk.
+// With no gameArg it prefers <basePath>/game.mdpk. A loose
+// <basePath>/assets folder remains a development fallback.
 bool ResolveGameDir(const std::string& gameArg, const std::string& basePath,
                     const std::filesystem::path& cacheRoot,
                     std::string& outDir, std::string& error);

@@ -27,4 +27,6 @@ public:
     // and writes a human-readable error including the source line.
     static std::optional<LoadedLevel> Load(const std::string& path,
                                            std::string& error);
+    static std::optional<LoadedLevel> LoadFromMemory(const std::string& text,
+                                                     std::string& error);
 };

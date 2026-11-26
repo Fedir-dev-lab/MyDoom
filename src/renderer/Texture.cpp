@@ -4,6 +4,7 @@
 #include <cmath>
 #include <fstream>
 #include <limits>
+#include <sstream>
 #include <utility>
 
 #include "Framebuffer.h"
@@ -72,10 +73,8 @@ Texture Texture::CreateCheckerboard(int width, int height, int cellSize,
     return Texture(width, height, std::move(pixels));
 }
 
-std::optional<Texture> Texture::LoadPpm(const std::string& path) {
-    std::ifstream input(path, std::ios::binary);
-    if (!input) { return std::nullopt; }
-
+namespace {
+std::optional<Texture> LoadPpmStream(std::istream& input) {
     std::string token;
     if (!ReadPpmToken(input, token) || (token != "P3" && token != "P6")) {
         return std::nullopt;
@@ -126,6 +125,20 @@ std::optional<Texture> Texture::LoadPpm(const std::string& path) {
     }
 
     return Texture(width, height, std::move(pixels));
+}
+} // namespace
+
+std::optional<Texture> Texture::LoadPpm(const std::string& path) {
+    std::ifstream input(path, std::ios::binary);
+    if (!input) { return std::nullopt; }
+    return LoadPpmStream(input);
+}
+
+std::optional<Texture> Texture::LoadPpmFromMemory(const uint8_t* data, size_t size) {
+    if (!data || size == 0) { return std::nullopt; }
+    std::string str(reinterpret_cast<const char*>(data), size);
+    std::istringstream stream(str);
+    return LoadPpmStream(stream);
 }
 
 Texture Texture::CreateLamp(int width, int height, uint32_t poleColor, uint32_t lightColor) {
